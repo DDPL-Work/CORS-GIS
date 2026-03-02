@@ -4,9 +4,10 @@ import { calculateDistance } from "../../utils/geoUtils";
 import { createPortal } from "react-dom";
 import { APPROVAL_ROLES } from "../../config/roleConfig";
 
-const canApprove = APPROVAL_ROLES.includes(state.auth.role);
 const LocationComparisonPanel = () => {
   const { state, dispatch } = useApp();
+
+  const canApprove = APPROVAL_ROLES.includes(state?.auth?.role);
   const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
   const [viewerImage, setViewerImage] = React.useState(null);
