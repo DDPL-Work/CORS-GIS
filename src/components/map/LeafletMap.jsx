@@ -1,35 +1,67 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from "react";
 
-const LeafletMap = ({ children, onMapReady }) => {
+const LeafletMap = ({ onMapReady }) => {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!window.L) {
+
+    const loadLeaflet = () => {
+      if (window.L) {
+        initMap();
+        return;
+      }
+
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+      link.href =
+        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
       document.head.appendChild(link);
-      const script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
-      script.onload = () => initMap();
-      document.head.appendChild(script);
-    } else {
-      initMap();
-    }
 
-    function initMap() {
+      const script = document.createElement("script");
+      script.src =
+        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+      script.onload = initMap;
+      document.head.appendChild(script);
+    };
+
+    const initMap = () => {
       if (mapInstanceRef.current) return;
-      const map = window.L.map(mapRef.current, { center: [28.6, 77.2], zoom: 10, zoomControl: true });
-      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap contributors | Survey of India – ReKHAnS",
-        maxZoom: 19,
-      }).addTo(map);
+
+      const L = window.L;
+
+      const map = L.map(mapRef.current, {
+        center: [22.5937, 78.9629], // India center
+        zoom: 5,
+        zoomControl: true,
+      });
+
+      // Mappls India Tiles
+      // L.tileLayer(
+      //   "https://apis.mappls.com/advancedmaps/v1/4b2825e6cf775ac9cd36d344c8b983cb/map_tile/{z}/{x}/{y}.png",
+      //   {
+      //     attribution: "© Mappls | Survey of India – ReKHAnS",
+      //     maxZoom: 18,
+      //   }
+      // ).addTo(map);
+L.tileLayer(
+ "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+ {
+   attribution: "© OpenStreetMap",
+   maxZoom: 19
+ }
+).addTo(map);
       mapInstanceRef.current = map;
-      onMapReady(map);
+
+      if (onMapReady) {
+        onMapReady(map);
+      }
+
       setReady(true);
-    }
+    };
+
+    loadLeaflet();
 
     return () => {
       if (mapInstanceRef.current) {
@@ -41,9 +73,25 @@ const LeafletMap = ({ children, onMapReady }) => {
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <div ref={mapRef} style={{ width: "100%", height: "100%", background: "#1a2332" }} />
+      <div
+        ref={mapRef}
+        style={{ width: "100%", height: "100%", background: "#1a2332" }}
+      />
+
       {!ready && (
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#0d1b2a", color: "#4dd0e1", fontSize: 14, fontFamily: "monospace" }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "#0d1b2a",
+            color: "#4dd0e1",
+            fontSize: 14,
+            fontFamily: "monospace",
+          }}
+        >
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🛰</div>
             <div>Initializing GIS Engine...</div>

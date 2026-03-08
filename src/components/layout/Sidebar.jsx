@@ -74,12 +74,51 @@ useEffect(() => {
     try {
       dispatch({ type: "SET_LOADING_HIERARCHY", payload: true });
 
-      const data = await fetchHierarchySites(state.auth.token);
+const data = await fetchHierarchySites(
+  state.auth.token,
+  state.auth.role
+);
 
-      dispatch({
-        type: "SET_HIERARCHY_SITES",
-        payload: Array.isArray(data) ? data : [],
-      });
+let normalized = [];
+
+if (role === "SUPERVISOR") {
+
+  // Supervisor API already correct
+  normalized = data;
+
+} else {
+
+  // Director / Zonal / GNRB → group subsites by station
+  const grouped = {};
+
+  data.forEach(sub => {
+
+    const key = sub.site_name;
+
+    if (!grouped[key]) {
+     grouped[key] = {
+  id: sub.site_name,
+  site_name: sub.site_name,
+  latitude: sub.latitude,
+  longitude: sub.longitude,
+  surveyor_name: sub.surveyor_name,
+  supervisor_name: sub.supervisor_name,
+  status: sub.status,
+  subsites: []
+};
+    }
+
+    grouped[key].subsites.push(sub);
+
+  });
+
+  normalized = Object.values(grouped);
+}
+
+dispatch({
+  type: "SET_HIERARCHY_SITES",
+  payload: normalized,
+});
 
       dispatch({ type: "SET_LOADING_HIERARCHY", payload: false });
     } catch (err) {
@@ -320,6 +359,67 @@ useEffect(() => {
       const isExpanded = expandedSubordinates[surveyorName];
       const totalStations = sites.length;
 
+const buildHierarchyTree = (sites, role) => {
+
+  const tree = {};
+
+  sites.forEach(site => {
+
+    const zonal = site.zonal_chief_name || "Unknown";
+    const director = site.director_name || "Unknown";
+    const supervisor = site.supervisor_name || "Unknown";
+    const surveyor = site.surveyor_name || "Unknown";
+
+    if (role === "SUPERVISOR") {
+
+      if (!tree[surveyor]) tree[surveyor] = [];
+      tree[surveyor].push(site);
+
+    }
+
+    else if (role === "DIRECTOR") {
+
+      if (!tree[supervisor]) tree[supervisor] = {};
+      if (!tree[supervisor][surveyor]) tree[supervisor][surveyor] = [];
+
+      tree[supervisor][surveyor].push(site);
+
+    }
+
+    else if (role === "ZONAL_CHIEF") {
+
+      if (!tree[director]) tree[director] = {};
+      if (!tree[director][supervisor]) tree[director][supervisor] = {};
+      if (!tree[director][supervisor][surveyor])
+        tree[director][supervisor][surveyor] = [];
+
+      tree[director][supervisor][surveyor].push(site);
+
+    }
+
+    else if (role === "GNRB") {
+
+      if (!tree[zonal]) tree[zonal] = {};
+      if (!tree[zonal][director]) tree[zonal][director] = {};
+      if (!tree[zonal][director][supervisor])
+        tree[zonal][director][supervisor] = {};
+      if (!tree[zonal][director][supervisor][surveyor])
+        tree[zonal][director][supervisor][surveyor] = [];
+
+      tree[zonal][director][supervisor][surveyor].push(site);
+
+    }
+
+  });
+
+  return tree;
+
+};
+const hierarchyTree = buildHierarchyTree(
+  state.hierarchySites,
+  role
+);
+
       return (
         <div key={surveyorName} style={{ marginBottom: 6 }}>
 
@@ -361,53 +461,140 @@ useEffect(() => {
           </button>
 
           {/* STATIONS */}
-          {isExpanded && (
-            <div style={{ marginLeft: 16, marginTop: 4 }}>
+        {/* STATIONS */}
+{isExpanded && (
+  <div style={{ marginLeft: 14, marginTop: 4 }}>
 
-              {sites.map(site => {
+    {sites.map(site => {
 
-                const isSelected = state.selectedStations.includes(site.id);
+      const stationSelected =
+        state.selectedStations.includes(site.id);
+
+      const subsites = site.subsites || [];
+
+      return (
+        <div key={site.id} style={{ marginBottom: 4 }}>
+
+          {/* STATION ROW */}
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "5px 8px",
+              cursor: "pointer",
+              borderRadius: 4,
+              fontSize: 11,
+              color: stationSelected ? "#00e5ff" : "#80deea",
+              fontFamily: "monospace"
+            }}
+          >
+
+            <input
+              type="checkbox"
+              checked={stationSelected}
+              onChange={() => toggleStation(site.id)}
+              style={{ accentColor: "#00e5ff" }}
+            />
+
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background:
+                  site.status === "GNRB_APPROVED"
+                    ? "#00e676"
+                    : site.status === "REJECTED"
+                    ? "#ff5252"
+                    : "#ffd700",
+                flexShrink: 0
+              }}
+            />
+
+            <span style={{ fontWeight: 600 }}>
+              {site.site_name}
+            </span>
+
+            <span
+              style={{
+                marginLeft: "auto",
+                background: "#00e5ff22",
+                color: "#4dd0e1",
+                borderRadius: 3,
+                padding: "1px 5px",
+                fontSize: 9
+              }}
+            >
+              {subsites.length}
+            </span>
+
+          </label>
+
+          {/* LOCATIONS */}
+          {stationSelected && (
+            <div style={{ marginLeft: 18 }}>
+
+              {subsites.map(sub => {
+
+                const locationSelected =
+                  state.selectedStations.includes(sub.id);
 
                 return (
                   <label
-                    key={site.id}
+                    key={sub.id}
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: 6,
-                      padding: "5px 8px",
+                      padding: "4px 6px",
                       cursor: "pointer",
-                      borderRadius: 4,
-                      fontSize: 11,
-                      color: isSelected ? "#00e5ff" : "#80deea",
+                      fontSize: 10,
+                      color: locationSelected
+                        ? "#00e5ff"
+                        : "#90caf9",
                       fontFamily: "monospace"
                     }}
                   >
+
                     <input
                       type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleStation(site.id)}
-                      style={{ accentColor: "#00e5ff" }}
+                      checked={locationSelected}
+                      onChange={() =>
+                        toggleStation(sub.id)
+                      }
+                      style={{ accentColor: "#7c4dff" }}
                     />
 
-                    <span style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: "50%",
-                      background:
-                        site.status === "APPROVED" ? "#00e676" :
-                        site.status === "REJECTED" ? "#ff5252" :
-                        "#ffd700",
-                      flexShrink: 0
-                    }} />
+                    <span
+                      style={{
+                        width: 5,
+                        height: 5,
+                        borderRadius: "50%",
+                        background:
+                          sub.status === "FINAL_APPROVED"
+                            ? "#00e676"
+                            : sub.status === "REJECTED"
+                            ? "#ff5252"
+                            : "#ffd700"
+                      }}
+                    />
 
-                    {site.station}
+                    {sub.location}
+
                   </label>
                 );
               })}
 
             </div>
           )}
+
+        </div>
+      );
+    })}
+
+  </div>
+)}
         </div>
       );
     })}

@@ -51,5 +51,5 @@ export const NAV_CONFIG = [
   { id: "map", label: "🗺 Map", roles: "ALL" },
   { id: "approvals", label: "✅ Approvals", roles: ["SUPERVISOR", "DIRECTOR", "GNRB","ZONAL_CHIEF"] },
   { id: "users", label: "👥 Users", roles: ["DIRECTOR"] },
-  { id: "analytics", label: "📊 Analytics", roles: ["DIRECTOR", "GNRB", "ZONAL_CHIEF"] },
+  // { id: "analytics", label: "📊 Analytics", roles: ["DIRECTOR", "GNRB", "ZONAL_CHIEF"] },
 ];

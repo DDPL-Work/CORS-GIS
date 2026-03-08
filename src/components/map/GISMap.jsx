@@ -33,7 +33,7 @@ const GISMap = () => {
   // explicit readiness flag so effects don't run too early
   const [mapReady, setMapReady] = useState(false);
 const [mapMoving, setMapMoving] = useState(false);
-  const visibleStations = useMemo(() => {
+const visibleStations = useMemo(() => {
   const {
     viewStationsMode,
     establishedStations,
@@ -41,52 +41,64 @@ const [mapMoving, setMapMoving] = useState(false);
     hierarchySites,
   } = state;
 
-  // 🏛 1️⃣ Established Stations Mode
+  const result = [];
+
+  // 🛰 Established CORS Stations
   if (viewStationsMode) {
-    return Array.isArray(establishedStations)
-      ? establishedStations
-      : [];
-  }
+    if (!Array.isArray(establishedStations)) return [];
 
-  // 🟢 2️⃣ Subordinate Sites Mode
-  if (
-    selectedStations.length > 0 &&
-    Array.isArray(hierarchySites)
-  ) {
-    const result = [];
+    establishedStations.forEach(st => {
+      const lat = Number(st.latitude);
+      const lng = Number(st.longitude);
 
-    hierarchySites.forEach(site => {
-      // only selected station checkbox
-      if (!selectedStations.includes(site.id)) return;
+      if (!isFinite(lat) || !isFinite(lng)) return;
 
-      if (!Array.isArray(site.subsites)) return;
-
-      site.subsites.forEach(sub => {
-        const lat = Number(sub?.location_details?.latitude);
-        const lng = Number(sub?.location_details?.longitude);
-
-        if (!isFinite(lat) || !isFinite(lng)) return;
-
-        result.push({
-  id: sub.id,
-  name: sub.location || site.station,
-  lat,
-  lng,
-  latitude: lat,
-  longitude: lng,
-  status: site.status?.toLowerCase() || "pending",
-  state: site.state,
-  district: site.district,
-  type: "hierarchy",
-  originalData: sub   // 🔥 FULL OBJECT HERE
-});
+      result.push({
+        id: st.id,
+        name: st.name,
+        code: st.code,
+        lat,
+        lng,
+        height: st.height,
+        district: st.district,
+        type: "established_station",
+        originalData: st
       });
     });
 
     return result;
   }
 
-  return [];
+  // 🏗 Proposed / Surveyed Stations (Sites)
+  if (Array.isArray(hierarchySites)) {
+
+    hierarchySites.forEach(site => {
+
+      if (!selectedStations.includes(site.id)) return;
+
+      const lat = Number(site.latitude);
+      const lng = Number(site.longitude);
+
+      if (!isFinite(lat) || !isFinite(lng)) return;
+
+      result.push({
+        id: site.id,
+        name: site.site_name,
+        lat,
+        lng,
+        status: site.status?.toLowerCase() || "pending",
+        state: site.location_details?.state,
+        district: site.location_details?.district,
+        type: "station",
+        originalData: site
+      });
+
+    });
+
+  }
+
+  return result;
+
 }, [
   state.viewStationsMode,
   state.establishedStations,
@@ -94,13 +106,43 @@ const [mapMoving, setMapMoving] = useState(false);
   state.hierarchySites
 ]);
 
-  const visibleLocations = useMemo(() => {
-    return getLocationsByStations(
-      state.locations,
-      visibleStations,
-      state.filters
-    );
-  }, [state.locations, visibleStations, state.filters]);
+const visibleLocations = useMemo(() => {
+
+  const result = [];
+
+  if (!Array.isArray(state.hierarchySites)) return result;
+
+  state.hierarchySites.forEach(site => {
+
+    if (!Array.isArray(site.subsites)) return;
+
+    site.subsites.forEach(sub => {
+
+      if (!state.selectedStations.includes(sub.id)) return;
+
+      const lat = Number(sub.location_details?.latitude);
+      const lng = Number(sub.location_details?.longitude);
+
+      if (!isFinite(lat) || !isFinite(lng)) return;
+
+      result.push({
+        id: sub.id,
+        name: sub.location,
+        lat,
+        lng,
+        status: sub.status?.toLowerCase() || "pending",
+        stationName: site.site_name,
+        type: "location",
+        originalData: sub
+      });
+
+    });
+
+  });
+
+  return result;
+
+}, [state.hierarchySites, state.selectedStations]);
 
   const addNamedPoint = useCallback(
     (pt) => {
@@ -239,10 +281,10 @@ const onMapReady = useCallback((map) => {
         ? `<div style="position:absolute;inset:-4px;border-radius:50%;"></div>`
         // ? `<div style="position:absolute;inset:-4px;border-radius:50%;border:2px solid #2196f3;animation:pulse-ring 2s ease-out infinite;opacity:0.5"></div>`
         : "";
-    const baseColor = isViewStations
+   const baseColor = isViewStations
   ? "#2196f3"
-  : station.type === "hierarchy"
-  ? "#ffd700"
+: station.type === "location"
+? "#7c4dff"
   : station.status === "active"
   ? "#00e5ff"
   : "#ff6b6b";
@@ -275,17 +317,41 @@ const onMapReady = useCallback((map) => {
                 : "select as Point " + (state.toolPoints.length + 1)
             }</span>`
           : "";
-        marker.bindTooltip(
-          `
-  <b>${station.name || station.station_name || "Unknown Station"}</b><br>
-  Code: ${station.code || "-"}<br>
-  State: ${station.state || "-"}<br>
-  District: ${station.district || "-"}<br>
-  Height: ${station.height ? station.height + " m" : "-"}<br>
-  Status: ${station.status || "Active"}
-  `,
-          { className: "gis-tooltip", sticky: false }
-        );
+     const data = station.originalData || {};
+
+let tooltipHTML = "";
+
+if (station.type === "established_station") {
+
+tooltipHTML = `
+<div style="line-height:1.5">
+<b>${data.name}</b><br>
+<b>Code:</b> ${data.code}<br>
+<b>Latitude:</b> ${data.latitude}<br>
+<b>Longitude:</b> ${data.longitude}<br>
+<b>Height:</b> ${data.height} m
+</div>
+`;
+
+}
+
+else if (station.type === "station") {
+
+tooltipHTML = `
+<div style="line-height:1.5">
+<b>${data.site_name}</b><br>
+<b>State:</b> ${data.location_details?.state || "-"}<br>
+<b>District:</b> ${data.location_details?.district || "-"}<br>
+<b>Status:</b> ${data.status || "-"}
+</div>
+`;
+
+}
+
+marker.bindTooltip(tooltipHTML,{
+  className:"gis-tooltip",
+  sticky:true
+});
 
  if (state.mapTool === "compare") {
   marker.on("click", (e) => {
@@ -313,23 +379,23 @@ else if (toolActive) {
   });
 } else {
   marker.on("click", () => {
-    if (station.type === "hierarchy" && station.originalData) {
-      dispatch({
-        type: "SET_NOTIFICATION",
-        payload: {
-          type: "location_detail",
-          location: station.originalData, // ✅ full subsite object
-        },
-      });
-    }
-  });
+  if (station.type === "location" && station.originalData) {
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "location_detail",
+        location: station.originalData,
+      },
+    });
+  }
+});
 }
 
         layersRef.current.stations.push(marker);
 
         // Coverage circle: 2 km, translucent (not opaque), station-level only
        // ✅ Only draw circle for real established stations
-if (station.type !== "hierarchy") {
+if (station.type === "station") {
   try {
     const circle = L.circle([lat, lng], {
       radius: 2000,
@@ -368,7 +434,7 @@ if (station.type !== "hierarchy") {
         approved: "#00e676",
         rejected: "#ff5252",
       };
-      const color = colorMap[loc.status] || "#fff";
+      const color = colorMap[loc.status] || "#836eb5";
       const isSelected = selectedEntityIds.includes(loc.id);
 
       const icon = L.divIcon({
@@ -408,16 +474,22 @@ if (station.type !== "hierarchy") {
                 : "Click to select as Point " + (state.toolPoints.length + 1)
             }</span>`
           : "";
-        marker.bindTooltip(
-          `
-  <b>${loc.name || "Unknown Location"}</b><br>
-  Station ID: ${loc.stationId || "-"}<br>
-  Status: ${loc.status || "-"}<br>
-  Latitude: ${loc.lat?.toFixed?.(5) || "-"}<br>
-  Longitude: ${loc.lng?.toFixed?.(5) || "-"}
-  `,
-          { className: "gis-tooltip", sticky: false }
-        );
+      const locData = loc.originalData || {};
+
+marker.bindTooltip(`
+<div style="line-height:1.5">
+<b>${locData.location}</b><br>
+<b>Station:</b> ${loc.stationName || "-"}<br>
+<b>State:</b> ${locData.location_details?.state || "-"}<br>
+<b>District:</b> ${locData.location_details?.district || "-"}<br>
+<b>Latitude:</b> ${loc.lat.toFixed(5)}<br>
+<b>Longitude:</b> ${loc.lng.toFixed(5)}<br>
+<b>Status:</b> ${loc.status}
+</div>
+`,{
+  className:"gis-tooltip",
+  sticky:true
+});
 
         if (toolActive && state.mapTool !== "compare") {
           marker.on("click", (e) => {

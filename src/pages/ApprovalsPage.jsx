@@ -1,8 +1,12 @@
 import { useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../context/AppContext";
-import { approveSurvey, fetchHierarchySites } from "../api/hierarchyApi";
-
+import {
+  supervisorDecision,
+  directorDecision,
+  zonalDecision,
+  gnrbDecision
+} from "../api/hierarchyApi";
 const rolesFlow = [
   "SUBMITTED",
   "SUPERVISOR_APPROVED",
@@ -11,14 +15,35 @@ const rolesFlow = [
   "GNRB_APPROVED",
 ];
 
+const roleApprovalMap = {
+  SUPERVISOR: "SUPERVISOR_APPROVED",
+  DIRECTOR: "DIRECTOR_APPROVED",
+  ZONAL_CHIEF: "ZONAL_CHIEF_APPROVED",
+  GNRB: "GNRB_APPROVED",
+};
+
+const normalizeStatus = (status) => {
+
+  if (!status) return "SUBMITTED";
+
+  if (status === "FINAL_APPROVED") return "GNRB_APPROVED";
+
+  return status;
+
+};
+
 const ApprovalsPage = () => {
   const { state, dispatch } = useApp();
-
+const [nocFile, setNocFile] = useState(null);
   const [tab, setTab] = useState("ALL");
   const [actionModal, setActionModal] = useState(null);
   const [remarks, setRemarks] = useState("");
   const [loading, setLoading] = useState(false);
-
+const priorityMap = {
+  1: "HIGH",
+  2: "MEDIUM",
+  3: "LOW"
+};
   const canAction = [
     "SUPERVISOR",
     "DIRECTOR",
@@ -29,24 +54,71 @@ const ApprovalsPage = () => {
 
   /* ---------------- FLATTEN DATA ---------------- */
 
-  const rows = useMemo(() => {
-    return state.hierarchySites.flatMap((site) =>
-      site.subsites.map((sub) => ({
-        siteId: site.id, // Survey ID
-        station: site.station,
-        state: site.state,
-        district: site.district,
-        surveyor: site.surveyor_name,
-        siteStatus: site.status,
+const canTakeAction = (status) => {
+
+  const userRole = state.auth.role;
+  const userApprovalStatus = roleApprovalMap[userRole];
+
+  if (!userApprovalStatus) return false;
+
+  const statusIndex = rolesFlow.indexOf(status);
+  const userIndex = rolesFlow.indexOf(userApprovalStatus);
+
+  // user can approve only if the status is exactly previous step
+  return statusIndex === userIndex - 1;
+};
+const rows = useMemo(() => {
+
+  const role = state.auth.role;
+
+  if (role === "SUPERVISOR") {
+
+    return (state.hierarchySites || []).flatMap(site =>
+      (site.subsites || []).map(sub => ({
+
+        siteId: site.id,
         locationId: sub.id,
-        location: sub.location,
+
+        station: site.site_name,
+        location: sub.location || "-",
+
         priority: sub.priority,
-        created_at: sub.created_at,
+        surveyor: site.surveyor_name,
+
         remarks: site.remarks,
+
+        siteStatus: normalizeStatus(sub.status),
+
+        created_at: sub.created_at
       }))
     );
-  }, [state.hierarchySites]);
 
+  }
+
+  // DIRECTOR / ZONAL / GNRB
+// DIRECTOR / ZONAL / GNRB
+return (state.hierarchySites || []).map(item => ({
+
+  siteId: null,
+
+  // THIS IS THE SUBSITE UUID
+  locationId: item.id,
+
+  station: item.site_name || "-",
+  location: item.location || "-",
+
+  priority: item.priority ?? null,
+  surveyor: item.surveyor_name || "-",
+
+  remarks: item.remarks || "",
+
+  siteStatus: normalizeStatus(item.status),
+
+  created_at: item.created_at
+}));
+
+
+}, [state.hierarchySites, state.auth.role]);
   const filteredRows =
     tab === "ALL"
       ? rows
@@ -66,48 +138,95 @@ const ApprovalsPage = () => {
 
   /* ---------------- APPROVE / REJECT ---------------- */
 
-  const handleDecision = async (decision) => {
-    try {
-      setLoading(true);
+const handleDecision = async (decision) => {
+console.log("Action modal:", actionModal);
+if (!actionModal.locationId) {
+  alert("Invalid subsite ID");
+  return;
+}
 
-      await approveSurvey(
+console.log("Subsite ID:", actionModal.locationId);
+  const role = state.auth.role;
+  setLoading(true);
+
+  try {
+
+    if (
+  actionModal.locationId &&
+  actionModal.locationId.length !== 36
+) {
+  alert("Invalid UUID detected");
+  return;
+}
+
+    if (role === "SUPERVISOR") {
+
+      await supervisorDecision(
         state.auth.token,
-        actionModal.siteId, // ✅ Survey ID
+        actionModal.siteId,
         decision,
         remarks
       );
 
-      // 🔥 Auto Refresh
-      const freshData = await fetchHierarchySites(state.auth.token);
-
-      dispatch({
-        type: "SET_HIERARCHY_SITES",
-        payload: freshData,
-      });
-
-      dispatch({
-        type: "SET_NOTIFICATION",
-        payload: {
-          type: "toast",
-          message: `Successfully ${decision}`,
-          color: decision === "APPROVED" ? "#00e676" : "#ff5252",
-        },
-      });
-
-      closeModal();
-    } catch (err) {
-      dispatch({
-        type: "SET_NOTIFICATION",
-        payload: {
-          type: "toast",
-          message: "Action failed",
-          color: "#ff5252",
-        },
-      });
-    } finally {
-      setLoading(false);
     }
-  };
+
+  if (role === "DIRECTOR") {
+
+  await directorDecision(
+    state.auth.token,
+    actionModal.locationId,
+    decision,
+    remarks
+  );
+
+  // send to zonal if approved
+  if (decision === "APPROVE") {
+    await sendToZonal(state.auth.token, actionModal.locationId);
+  }
+
+}
+
+    if (role === "ZONAL_CHIEF") {
+
+      await zonalDecision(
+        state.auth.token,
+        actionModal.locationId,
+        decision,
+        remarks
+      );
+
+    }
+
+    if (role === "GNRB") {
+
+      await gnrbDecision(
+        state.auth.token,
+        actionModal.locationId,
+        decision,
+        remarks
+      );
+
+    }
+    if (!actionModal.locationId) {
+  alert("Subsite ID missing. Contact backend.");
+  return;
+}
+
+    await dispatch({ type: "REFETCH_HIERARCHY" });
+
+    closeModal();
+
+  } catch (err) {
+
+    console.error("Approval error:", err);
+
+  } finally {
+
+    setLoading(false);
+
+  }
+
+};
 
   /* ---------------- UI ---------------- */
 
@@ -134,8 +253,8 @@ const ApprovalsPage = () => {
           <tr>
             {[
               "Station",
-              "State",
-              "District",
+              // "State",
+              // "District",
               "Location",
               "Surveyor",
               "Priority",
@@ -155,14 +274,15 @@ const ApprovalsPage = () => {
           {filteredRows.map((row) => (
             <tr key={row.locationId}>
               <td style={cell}>{row.station}</td>
-              <td style={cell}>{row.state}</td>
-              <td style={cell}>{row.district}</td>
+              {/* <td style={cell}>{row.state}</td>
+              <td style={cell}>{row.district}</td> */}
               <td style={cell}>{row.location}</td>
               <td style={cell}>{row.surveyor}</td>
-              <td style={cell}>{["", "HIGH", "MEDIUM", "LOW"][row.priority]}</td>
-              <td style={cell}>
-                {new Date(row.created_at).toLocaleString()}
-              </td>
+<td style={cell}>{priorityMap[row.priority] || "-"}</td>       
+       <td style={cell}>
+{row.created_at
+  ? new Date(row.created_at).toLocaleString()
+  : "-"}              </td>
 
               {/* STATUS + TIMELINE */}
               <td style={cell}>
@@ -178,18 +298,22 @@ const ApprovalsPage = () => {
 
               {canAction && (
                 <td style={cell}>
-                  {row.siteStatus?.includes(state.auth.role) ? (
-                    <span style={{ color: "#00e676", fontSize: 11 }}>
-                      Approved by You ✓
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => openActionModal(row)}
-                      style={actionBtn}
-                    >
-                      Take Action
-                    </button>
-                  )}
+                {canTakeAction(row.siteStatus) ? (
+
+  <button
+    onClick={() => openActionModal(row)}
+    style={actionBtn}
+  >
+    Take Action
+  </button>
+
+) : (
+
+  <span style={{ color: "#00e676", fontSize: 11 }}>
+    Approval Locked ✓
+  </span>
+
+)}
                 </td>
               )}
             </tr>
@@ -213,10 +337,41 @@ const ApprovalsPage = () => {
                 rows={4}
                 style={textareaStyle}
               />
+{/* NOC Upload (Supervisor only) */}
 
+{state.auth.role === "SUPERVISOR" && (
+
+  <div style={{ marginTop: 14 }}>
+
+    <label style={{ color: "#80deea", fontSize: 12 }}>
+      Upload NOC (Optional)
+    </label>
+
+    <input
+      type="file"
+      accept=".pdf,.jpg,.png"
+      onChange={(e) => setNocFile(e.target.files[0])}
+      style={{
+        marginTop: 6,
+        color: "#e0f7fa",
+        fontSize: 12
+      }}
+    />
+
+    <div style={{
+      fontSize: 10,
+      color: "#80deea",
+      marginTop: 4
+    }}>
+      Uploading NOC will lock this field permanently.
+    </div>
+
+  </div>
+
+)}
               <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
                 <button
-                  onClick={() => handleDecision("APPROVED")}
+onClick={() => handleDecision("APPROVE")}
                   disabled={loading}
                   style={approveBtn}
                 >
@@ -224,7 +379,7 @@ const ApprovalsPage = () => {
                 </button>
 
                 <button
-                  onClick={() => handleDecision("REJECTED")}
+                  onClick={() => handleDecision("REJECT")}
                   disabled={loading}
                   style={rejectBtn}
                 >
