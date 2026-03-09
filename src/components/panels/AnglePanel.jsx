@@ -1,7 +1,13 @@
+
+// AnglePanel.jsx
+
 import { useApp } from '../../context/AppContext';
 import { calculateDistance, calculateBearing, calculateAngle } from '../../utils/geoUtils';
-import { calculateTriangleArea, getTriangleType } from '../../utils/triangleUtils';
-
+import { 
+  calculateTriangleArea, 
+  getTriangleType,
+  calculateStrengthOfFigure
+} from '../../utils/triangleUtils';
 const AnglePanel = () => {
   const { state, dispatch } = useApp();
   const { toolPoints } = state;
@@ -15,7 +21,7 @@ const AnglePanel = () => {
   const angleC = hasTriangle ? calculateAngle(A, C, B) : null;
   const area = hasTriangle ? calculateTriangleArea(A, B, C) : 0;
   const triangleType = hasTriangle ? getTriangleType(A, B, C) : "";
-
+const sof = hasTriangle ? calculateStrengthOfFigure(angleA, angleB, angleC) : 0;
   const sides = hasTriangle ? [
     { label: "AB", from: A, to: B },
     { label: "BC", from: B, to: C },
@@ -76,10 +82,20 @@ const AnglePanel = () => {
               <span style={{ color: "#80deea" }}>Type</span>
               <span style={{ color: "#e040fb", fontWeight: 700 }}>{triangleType}</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+            {/* <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
               <span style={{ color: "#80deea" }}>Area</span>
               <span style={{ color: "#ff9800", fontWeight: 700 }}>{area.toFixed(4)} km²</span>
-            </div>
+            </div> */}
+
+
+<div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+  <span style={{ color: "#80deea" }}>Strength of Figure</span>
+  <span style={{ color: "#00e5ff", fontWeight: 700 }}>
+    {sof.toFixed(4)}
+  </span>
+</div>
+
+
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span style={{ color: "#80deea" }}>∑ Angles</span>
               <span style={{ color: "#00e676", fontWeight: 700 }}>{(angleA + angleB + angleC).toFixed(2)}°</span>

@@ -158,24 +158,74 @@ const LocationModal = () => {
     setIsFullscreen(!isFullscreen);
   };
 
+const updatePriority = async () => {
+
+  const token = state.auth.token;
+
+  try {
+
+    setIsSubmitting(true);
+
+  await updateSubsitePriority(
+  token,
+  loc.survey_id,   // parent survey id
+  loc.id,          // subsite id
+  priority
+);
+
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "toast",
+        message: "Priority updated successfully",
+        color: "#10b981"
+      }
+    });
+
+    dispatch({ type: "REFETCH_HIERARCHY" });
+
+    handleClose();
+
+  } catch (err) {
+
+    console.error(err);
+
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "toast",
+        message: "Priority update failed",
+        color: "#ef4444"
+      }
+    });
+
+  } finally {
+
+    setIsSubmitting(false);
+
+  }
+
+};
+
   /* ---------------- MOUSE WHEEL ZOOM ---------------- */
   const onWheel = (e) => {
     e.preventDefault();
     if (e.deltaY < 0) zoomIn();
     else zoomOut();
   };
-const isFinalApproved = loc.status === "FINAL_APPROVED";
+const isFinalApproved = loc.status === "FINAL_APPROVED" ;
   /* ---------------- ROLE RULE ---------------- */
-  const canApprove =
-    role !== "SUPERVISOR" &&
-    ["DIRECTOR", "ZONAL_CHIEF", "GNRB", "ADMIN"].includes(role);
+  const isSupervisor = role === "SUPERVISOR";
+
+const canApprove =
+  ["DIRECTOR", "ZONAL_CHIEF", "GNRB", "ADMIN"].includes(role);
 
   /* ---------------- ACTION ---------------- */
 const update = async (status) => {
 
   const token = state.auth.token;
   const role = state.auth.role;
-const decision = status === "approved" ? "approve" : "reject";
+const decision = status === "approved" ? "APPROVE" : "REJECT";
   setIsSubmitting(true);
 
   try {
@@ -199,7 +249,7 @@ const decision = status === "approved" ? "approve" : "reject";
     }
 
 
-    if (loc.status === "FINAL_APPROVED") {
+    if (loc.status === "FINAL_APPROVED" || loc.status === "SENT_TO_GNRB") {
   dispatch({
     type: "SET_NOTIFICATION",
     payload: {
@@ -689,12 +739,12 @@ dispatch({
                 <div style={styles.sectionTitleLine} />
               </div>
               <div style={styles.grid}>
-                <InfoCard label="Site Name" value={loc.site_name} />
+                {/* <InfoCard label="Site Name" value={loc.site_name} /> */}
                 <InfoCard label="Location" value={loc.location} />
                 <InfoCard label="Status" value={loc.status} badge />
                 <InfoCard label="Priority" value={loc.priority} priority />
-                <InfoCard label="Surveyor" value={loc.surveyor_name} />
-                <InfoCard label="Supervisor" value={loc.supervisor_name} />
+                {/* <InfoCard label="Surveyor" value={loc.surveyor_name} />
+                <InfoCard label="Supervisor" value={loc.supervisor_name} /> */}
                 <InfoCard label="Contact" value={loc.contact_details || "Not provided"} />
                 <InfoCard label="RINEX File" value={loc.rinex_file ? "Uploaded" : "Not Uploaded"} />
               </div>
@@ -909,69 +959,36 @@ dispatch({
             )}
 
             {/* Approval Actions */}
-{canApprove && !isFinalApproved && (
-                <div style={styles.section}>
-                <div style={styles.sectionTitle}>
-                  <span>⚖️</span>
-                  Approval Actions
-                  <div style={styles.sectionTitleLine} />
-                </div>
+{/* SUPERVISOR PRIORITY UPDATE */}
+{isSupervisor && !isFinalApproved && (
+  <div style={styles.section}>
 
-                <textarea
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="Add your remarks here..."
-                  rows={3}
-                  style={styles.textarea}
-                />
+    <div style={styles.sectionTitle}>
+      <span>⭐</span>
+      Update Priority
+      <div style={styles.sectionTitleLine}/>
+    </div>
 
-                <select
-                  value={priority}
-                  onChange={(e) => setPriority(+e.target.value)}
-                  style={styles.select}
-                >
-                  <option value={1}>🔴 High Priority (1)</option>
-                  <option value={2}>🟡 Medium Priority (2)</option>
-                  <option value={3}>🟢 Low Priority (3)</option>
-                </select>
+    <select
+      value={priority}
+      onChange={(e)=>setPriority(+e.target.value)}
+      style={styles.select}
+    >
+      <option value={1}>🔴 High Priority (1)</option>
+      <option value={2}>🟡 Medium Priority (2)</option>
+      <option value={3}>🟢 Low Priority (3)</option>
+    </select>
 
-                <div style={styles.buttonGroup}>
-                  <button
-                    onClick={() => update("approved")}
-disabled={isSubmitting || isFinalApproved}
-                    style={styles.approveBtn}
-                    onMouseEnter={(e) => !isSubmitting && (e.target.style.transform = "translateY(-2px)")}
-                    onMouseLeave={(e) => !isSubmitting && (e.target.style.transform = "translateY(0)")}
-                  >
-                    {isSubmitting ? (
-                      "Processing..."
-                    ) : (
-                      <>
-                        <span>✓</span>
-                        APPROVE
-                      </>
-                    )}
-                  </button>
+    <button
+      onClick={updatePriority}
+      disabled={isSubmitting}
+      style={styles.approveBtn}
+    >
+      Update Priority
+    </button>
 
-                  <button
-                    onClick={() => update("rejected")}
-disabled={isSubmitting || isFinalApproved}            
-        style={styles.rejectBtn}
-                    onMouseEnter={(e) => !isSubmitting && (e.target.style.transform = "translateY(-2px)")}
-                    onMouseLeave={(e) => !isSubmitting && (e.target.style.transform = "translateY(0)")}
-                  >
-                    {isSubmitting ? (
-                      "Processing..."
-                    ) : (
-                      <>
-                        <span>✕</span>
-                        REJECT
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
+  </div>
+)}
           </div>
         </div>
       </div>

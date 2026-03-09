@@ -56,10 +56,15 @@ export const supervisorDecision = async (
 
 /* ---------------- UPDATE SUBSITE PRIORITY (SUPERVISOR) ---------------- */
 
-export const updateSubsitePriority = async (token, subsiteId, priority) => {
+export const updateSubsitePriority = async (
+  token,
+  surveyId,
+  subsiteId,
+  priority
+) => {
 
   const res = await fetch(
-    `${BASE}/subsite/${subsiteId}/priority/`,
+    `${BASE}/survey/${surveyId}/supervisor/`,
     {
       method: "PUT",
       headers: {
@@ -67,7 +72,8 @@ export const updateSubsitePriority = async (token, subsiteId, priority) => {
         Authorization: `Token ${token}`,
       },
       body: JSON.stringify({
-        priority
+        subsite_id: subsiteId,
+        priority: priority
       }),
     }
   );

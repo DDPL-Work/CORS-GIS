@@ -79,41 +79,9 @@ const data = await fetchHierarchySites(
   state.auth.role
 );
 
-let normalized = [];
+// let normalized = [];
+const normalized = Array.isArray(data) ? data : [];
 
-if (role === "SUPERVISOR") {
-
-  // Supervisor API already correct
-  normalized = data;
-
-} else {
-
-  // Director / Zonal / GNRB → group subsites by station
-  const grouped = {};
-
-  data.forEach(sub => {
-
-    const key = sub.site_name;
-
-    if (!grouped[key]) {
-     grouped[key] = {
-  id: sub.site_name,
-  site_name: sub.site_name,
-  latitude: sub.latitude,
-  longitude: sub.longitude,
-  surveyor_name: sub.surveyor_name,
-  supervisor_name: sub.supervisor_name,
-  status: sub.status,
-  subsites: []
-};
-    }
-
-    grouped[key].subsites.push(sub);
-
-  });
-
-  normalized = Object.values(grouped);
-}
 
 dispatch({
   type: "SET_HIERARCHY_SITES",

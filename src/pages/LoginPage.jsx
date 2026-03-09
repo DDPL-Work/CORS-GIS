@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 // import { MOCK_USERS } from "../data/mockUsers";
 import { loginUser, signupUser } from "../api/authApi";
-import soiLogo from "../assets/survey-logo2.png";
+import soiLogo from "../assets/EMBLEM_27_200DPI.webp";
 import { ROLES, ALL_ZONES } from "../config/roleConfig";
 const LoginPage = () => {
   const { dispatch } = useApp();
@@ -223,8 +223,8 @@ const availableZones =
          <div style={{
   width: 224,
   height: 245,
-  borderRadius: "50%",
-  background: "rgba(245 254 255  / 75%)",
+  borderRadius: "70%",
+  background: "#ffffff",
   border: "2px solid #00e5ff",
   boxShadow: "0 0 40px rgba(0,229,255,0.3)",
   display: "flex",
@@ -237,7 +237,7 @@ const availableZones =
     src={soiLogo}
     alt="Survey of India Logo"
     style={{
-      width: "70%",
+      width: "60%",
       objectFit: "contain"
     }}
   />

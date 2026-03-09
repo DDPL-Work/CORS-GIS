@@ -1,3 +1,6 @@
+
+// triangleUtils.js
+
 import { calculateDistance, calculateAngle } from './geoUtils';
 
 export const calculateTriangleArea = (A, B, C) => {
@@ -22,3 +25,17 @@ export const getTriangleType = (A, B, C) => {
 };
 
 export const midpoint = (A, B) => ({ lat: (A.lat + B.lat) / 2, lng: (A.lng + B.lng) / 2 });
+
+
+
+export const calculateStrengthOfFigure = (A, B, C) => {
+  const degToRad = Math.PI / 180;
+
+  const cot = (x) => 1 / Math.tan(x);
+
+  const a = cot((A / 2) * degToRad);
+  const b = cot((B / 2) * degToRad);
+  const c = cot((C / 2) * degToRad);
+
+  return (1 / 3) * (a * a + b * b + c * c);
+};

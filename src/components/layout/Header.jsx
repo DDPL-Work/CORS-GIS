@@ -1,6 +1,6 @@
 import { useApp } from "../../context/AppContext";
 import { ROLE_META, NAV_CONFIG } from "../../config/roleConfig";
-import soiLogo from "../../assets/survey-logo2.png";
+import soiLogo from "../../assets/EMBLEM_27_200DPI.webp";
 
 const Header = () => {
   const { state, dispatch } = useApp();
