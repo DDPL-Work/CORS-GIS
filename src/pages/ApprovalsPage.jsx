@@ -1,485 +1,289 @@
-import { useState, useMemo } from "react";
-import { createPortal } from "react-dom";
+import { useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
 import {
-  supervisorDecision,
-  directorDecision,
-  zonalDecision,
-  gnrbDecision,
-} from "../api/hierarchyApi";
-const rolesFlow = [
-  "SUBMITTED",
-  "SUPERVISOR_APPROVED",
-  "DIRECTOR_APPROVED",
-  "ZONAL_CHIEF_APPROVED",
-  "GNRB_APPROVED",
-];
+  getActorLabelForRole,
+  getSitePriority,
+  summarizeSiteLocations,
+} from "../utils/hierarchyHelpers";
+import {
+  canRoleSubmitToNextLevel,
+  canRoleTakeSubsiteAction,
+  getStatusStyleForRole,
+  normalizeWorkflowStatus,
+} from "../utils/workflowStatus";
 
-const roleApprovalMap = {
-  SUPERVISOR: "SUPERVISOR_APPROVED",
-  DIRECTOR: "DIRECTOR_APPROVED",
-  ZONAL_CHIEF: "ZONAL_CHIEF_APPROVED",
-  GNRB: "GNRB_APPROVED",
-};
-
-const normalizeStatus = (status) => {
-  if (!status) return "SUBMITTED";
-
-  if (status === "FINAL_APPROVED") return "GNRB_APPROVED";
-
-  return status;
+const priorityMap = {
+  1: "HIGH",
+  2: "MEDIUM",
+  3: "LOW",
 };
 
 const ApprovalsPage = () => {
   const { state, dispatch } = useApp();
-  const [nocFile, setNocFile] = useState(null);
   const [tab, setTab] = useState("ALL");
-  const [actionModal, setActionModal] = useState(null);
-  const [remarks, setRemarks] = useState("");
-  const [loading, setLoading] = useState(false);
-  const priorityMap = {
-    1: "HIGH",
-    2: "MEDIUM",
-    3: "LOW",
-  };
-  const canAction = [
-    "SUPERVISOR",
-    "DIRECTOR",
-    "ZONAL_CHIEF",
-    "GNRB",
-    "ADMIN",
-  ].includes(state.auth.role);
+  const role = state.auth.role;
+  const actorLabel = getActorLabelForRole(role);
+  const isSupervisor = role === "SUPERVISOR";
 
-  /* ---------------- FLATTEN DATA ---------------- */
-
-  const canTakeAction = (status) => {
-    const userRole = state.auth.role;
-    const userApprovalStatus = roleApprovalMap[userRole];
-
-    if (!userApprovalStatus) return false;
-
-    const statusIndex = rolesFlow.indexOf(status);
-    const userIndex = rolesFlow.indexOf(userApprovalStatus);
-
-    // user can approve only if the status is exactly previous step
-    return statusIndex === userIndex - 1;
-  };
   const rows = useMemo(() => {
+    if (isSupervisor) {
+      return (state.hierarchySites || []).map((site) => ({
+        id: site.id,
+        station: site.site_name || "-",
+        location: summarizeSiteLocations(site),
+        actor: site.surveyor_name || "-",
+        priority: getSitePriority(site),
+        createdAt:
+          site.created_at ||
+          site.subsites?.[0]?.created_at ||
+          null,
+        rawStatus: site.status || "SUBMITTED",
+        status: normalizeWorkflowStatus(site.status || "SUBMITTED"),
+        remarks: site.remarks || "-",
+        originalSite: site,
+        originalSubsite: null,
+      }));
+    }
 
-  return (state.hierarchySites || []).flatMap((site) =>
-    (site.subsites || []).map((sub) => ({
+    return (state.hierarchySites || []).flatMap((site) =>
+      (site.subsites || []).map((subsite) => ({
+        id: subsite.id,
+        station: site.site_name || "-",
+        location: subsite.location || "-",
+        actor:
+          site.supervisor_name ||
+          site.director_name ||
+          site.surveyor_name ||
+          "-",
+        priority: subsite.priority ?? null,
+        createdAt: subsite.created_at || null,
+        rawStatus: subsite.status || "SUBMITTED",
+        status: normalizeWorkflowStatus(subsite.status || "SUBMITTED"),
+        remarks: subsite.remarks || site.remarks || "-",
+        originalSite: site,
+        originalSubsite: subsite,
+      }))
+    );
+  }, [isSupervisor, state.hierarchySites]);
 
-      siteId: site.id,
-      locationId: sub.id,
+  const availableTabs = useMemo(() => {
+    const statuses = rows
+      .map((row) => row.status)
+      .filter(Boolean);
 
-      station: site.site_name || "-",
-      location: sub.location || "-",
+    return ["ALL", ...new Set(statuses)];
+  }, [rows]);
 
-      priority: sub.priority ?? null,
-
-      surveyor: site.surveyor_name || "-",
-
-      remarks: site.remarks || "",
-
-      siteStatus: normalizeStatus(sub.status),
-
-      created_at: sub.created_at || null
-
-    }))
-  );
-
-}, [state.hierarchySites]);
   const filteredRows =
-    tab === "ALL" ? rows : rows.filter((r) => r.siteStatus === tab);
+    tab === "ALL" ? rows : rows.filter((row) => row.status === tab);
 
-  /* ---------------- ACTION MODAL ---------------- */
+  const openRoleAction = (row) => {
+    if (role === "SUPERVISOR") {
+      if (!row.originalSite) return;
 
-  const openActionModal = (row) => {
-    setActionModal(row);
-    setRemarks("");
-  };
-
-  const closeModal = () => {
-    setActionModal(null);
-    setRemarks("");
-  };
-
-  /* ---------------- APPROVE / REJECT ---------------- */
-
-  const handleDecision = async (decision) => {
-    console.log("Action modal:", actionModal);
-    if (!actionModal.locationId) {
-      alert("Invalid subsite ID");
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "station_action",
+          station: row.originalSite,
+        },
+      });
       return;
     }
 
-    console.log("Subsite ID:", actionModal.locationId);
-    const role = state.auth.role;
-    setLoading(true);
-
-    try {
-      if (actionModal.locationId && actionModal.locationId.length !== 36) {
-        alert("Invalid UUID detected");
-        return;
-      }
-
-      if (role === "SUPERVISOR") {
-        await supervisorDecision(
-          state.auth.token,
-          actionModal.siteId,
-          decision,
-          remarks
-        );
-      }
-
-      if (role === "DIRECTOR") {
-        await directorDecision(
-          state.auth.token,
-          actionModal.locationId,
-          decision,
-          remarks
-        );
-
-        // send to zonal if approved
-        if (decision === "APPROVE") {
-          await sendToZonal(state.auth.token, actionModal.locationId);
-        }
-      }
-
-      if (role === "ZONAL_CHIEF") {
-        await zonalDecision(
-          state.auth.token,
-          actionModal.locationId,
-          decision,
-          remarks
-        );
-      }
-
-      if (role === "GNRB") {
-        await gnrbDecision(
-          state.auth.token,
-          actionModal.locationId,
-          decision,
-          remarks
-        );
-      }
-      if (!actionModal.locationId) {
-        alert("Subsite ID missing. Contact backend.");
-        return;
-      }
-
-      await dispatch({ type: "REFETCH_HIERARCHY" });
-
-      closeModal();
-    } catch (err) {
-      console.error("Approval error:", err);
-    } finally {
-      setLoading(false);
-    }
+    if (!row.originalSubsite) return;
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "location_detail",
+        location: row.originalSubsite,
+      },
+    });
   };
 
-  /* ---------------- UI ---------------- */
-
   return (
-    <div style={containerStyle}>
-      <div style={titleStyle}>📋 Station Submissions</div>
+    <div style={styles.container}>
+      <div style={styles.title}>Station Approvals</div>
 
-      {/* FILTERS */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-        {["ALL", ...rolesFlow].map((t) => (
-          <button key={t} onClick={() => setTab(t)} style={tabStyle(tab === t)}>
-            {t}
+      <div style={styles.tabs}>
+        {availableTabs.map((item) => (
+          <button
+            key={item}
+            onClick={() => setTab(item)}
+            style={styles.tab(tab === item)}
+          >
+            {item}
           </button>
         ))}
       </div>
 
-      {/* TABLE */}
-      <table style={tableStyle}>
-        <thead>
-          <tr>
-            {[
-              "Station",
-              // "State",
-              // "District",
-              "Location",
-              "Surveyor",
-              "Priority",
-              "Created",
-              "Status",
-              "Remarks",
-              canAction && "Action",
-            ]
-              .filter(Boolean)
-              .map((h) => (
-                <th key={h} style={thStyle}>
-                  {h}
-                </th>
-              ))}
-          </tr>
-        </thead>
-
-        <tbody>
-          {filteredRows.map((row) => (
-            <tr key={row.locationId}>
-              <td style={cell}>{row.station}</td>
-              {/* <td style={cell}>{row.state}</td>
-              <td style={cell}>{row.district}</td> */}
-              <td style={cell}>{row.location}</td>
-              <td style={cell}>{row.surveyor}</td>
-              <td style={cell}>{priorityMap[row.priority] || "-"}</td>
-              <td style={cell}>
-                {row.created_at
-                  ? new Date(row.created_at).toLocaleString()
-                  : "-"}{" "}
-              </td>
-
-              {/* STATUS + TIMELINE */}
-              <td style={cell}>
-                <div
-                  style={{ display: "flex", flexDirection: "column", gap: 6 }}
-                >
-                  <span style={statusStyle(row.siteStatus)}>
-                    {row.siteStatus}
-                  </span>
-                  <ApprovalTimeline status={row.siteStatus} />
-                </div>
-              </td>
-
-              <td style={cell}>{row.remarks || "—"}</td>
-
-              {canAction && (
-                <td style={cell}>
-                  {canTakeAction(row.siteStatus) ? (
-                    <button
-                      onClick={() => openActionModal(row)}
-                      style={actionBtn}
-                    >
-                      Take Action
-                    </button>
-                  ) : (
-                    <span style={{ color: "#00e676", fontSize: 11 }}>
-                      Approval Locked ✓
-                    </span>
-                  )}
-                </td>
-              )}
+      <div style={styles.tableWrap}>
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Station</th>
+              <th style={styles.th}>Location</th>
+              <th style={styles.th}>{actorLabel}</th>
+              <th style={styles.th}>Priority</th>
+              <th style={styles.th}>Created</th>
+              <th style={styles.th}>Status</th>
+              {/* <th style={styles.th}>Action</th> */}
+              {/* <th style={styles.th}>Remarks</th> */}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filteredRows.map((row) => {
+              const statusStyle = getStatusStyleForRole(row.rawStatus, role);
+              const canTakeAction =
+                role === "SUPERVISOR"
+                  ? ["SUBMITTED", "SUPERVISOR_APPROVED"].includes(row.status)
+                  : canRoleTakeSubsiteAction(role, row.rawStatus);
+              const canSubmitToNext = canRoleSubmitToNextLevel(role, row.rawStatus);
+              const actionEnabled = canTakeAction || canSubmitToNext;
+              const actionLabel =
+                role === "DIRECTOR" && canSubmitToNext && !canTakeAction
+                  ? "Submit to Zonal"
+                  : "Take Action";
 
-      {/* ACTION MODAL */}
-      {actionModal &&
-        createPortal(
-          <div style={modalBackdrop} onClick={closeModal}>
-            <div style={modalBox} onClick={(e) => e.stopPropagation()}>
-              <h3 style={{ color: "#00e5ff" }}>
-                Action on {actionModal.location}
-              </h3>
+              return (
+                <tr key={row.id} style={styles.row}>
+                  <td style={styles.cell}>{row.station}</td>
+                  <td style={{ ...styles.cell, ...styles.locationCell }}>{row.location}</td>
+                  <td style={styles.cell}>{row.actor}</td>
+                  <td style={styles.cell}>{priorityMap[row.priority] || "-"}</td>
+                  <td style={styles.cell}>
+                    {row.createdAt ? new Date(row.createdAt).toLocaleString() : "-"}
+                  </td>
+                  <td style={styles.cell}>
+                    <span
+                      style={{
+                        ...styles.statusBadge,
+                        background: statusStyle.background,
+                        color: statusStyle.color,
+                      }}
+                    >
+                      {row.status}
+                    </span>
+                  </td>
+                  {/* <td style={styles.cell}>
+                    <button
+                      onClick={() => openRoleAction(row)}
+                      disabled={!actionEnabled}
+                      style={{
+                        ...styles.actionButton,
+                        opacity: actionEnabled ? 1 : 0.55,
+                        cursor: actionEnabled ? "pointer" : "not-allowed",
+                      }}
+                    >
+                      {actionLabel}
+                    </button>
+                  </td> */}
+                  {/* <td style={{ ...styles.cell, ...styles.remarksCell }}>{row.remarks}</td> */}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
 
-              <textarea
-                value={remarks}
-                onChange={(e) => setRemarks(e.target.value)}
-                placeholder="Enter remarks..."
-                rows={4}
-                style={textareaStyle}
-              />
-              {/* NOC Upload (Supervisor only) */}
-
-              {state.auth.role === "SUPERVISOR" && (
-                <div style={{ marginTop: 14 }}>
-                  <label style={{ color: "#80deea", fontSize: 12 }}>
-                    Upload NOC (Optional)
-                  </label>
-
-                  <input
-                    type="file"
-                    accept=".pdf,.jpg,.png"
-                    onChange={(e) => setNocFile(e.target.files[0])}
-                    style={{
-                      marginTop: 6,
-                      color: "#e0f7fa",
-                      fontSize: 12,
-                    }}
-                  />
-
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: "#80deea",
-                      marginTop: 4,
-                    }}
-                  >
-                    Uploading NOC will lock this field permanently.
-                  </div>
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
-                <button
-                  onClick={() => handleDecision("APPROVE")}
-                  disabled={loading}
-                  style={approveBtn}
-                >
-                  ✓ Approve
-                </button>
-
-                <button
-                  onClick={() => handleDecision("REJECT")}
-                  disabled={loading}
-                  style={rejectBtn}
-                >
-                  ✕ Reject
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body
+        {filteredRows.length === 0 && (
+          <div style={styles.emptyState}>No approval rows found for this filter.</div>
         )}
+      </div>
     </div>
   );
 };
 
-/* ---------------- TIMELINE COMPONENT ---------------- */
+const styles = {
+  container: {
+    flex: 1,
+    padding: 28,
+    background: "#0a1628",
+    fontFamily: "monospace",
+    overflow: "auto",
+  },
+  title: {
+    color: "#00e5ff",
+    fontSize: 22,
+    fontWeight: 800,
+    marginBottom: 18,
+  },
+  tabs: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    marginBottom: 18,
+  },
+  tab: (active) => ({
+    padding: "7px 14px",
+    borderRadius: 8,
+    background: active ? "#00e5ff22" : "transparent",
+    border: "1px solid #00e5ff33",
+    color: active ? "#00e5ff" : "#80deea",
+    cursor: "pointer",
+    fontSize: 11,
+  }),
+ tableWrap: {
+  border: "1px solid rgba(0, 229, 255, 0.14)",
+  borderRadius: 14,
+  background: "rgba(255, 255, 255, 0.02)",
 
-const ApprovalTimeline = ({ status }) => {
-  return (
-    <div style={{ display: "flex", gap: 6 }}>
-      {rolesFlow.map((step) => {
-        const completed = rolesFlow.indexOf(status) >= rolesFlow.indexOf(step);
-
-        return (
-          <div
-            key={step}
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: completed ? "#00e676" : "#444",
-            }}
-            title={step}
-          />
-        );
-      })}
-    </div>
-  );
-};
-
-/* ---------------- STYLES ---------------- */
-
-const containerStyle = {
-  flex: 1,
-  padding: 28,
-  background: "#0a1628",
-  fontFamily: "monospace",
-  overflowY: "auto",
-};
-
-const titleStyle = {
-  color: "#00e5ff",
-  fontSize: 20,
-  fontWeight: 900,
-  marginBottom: 20,
-};
-
-const tabStyle = (active) => ({
-  padding: "6px 14px",
-  borderRadius: 6,
-  background: active ? "#00e5ff22" : "transparent",
-  border: "1px solid #00e5ff33",
-  color: active ? "#00e5ff" : "#80deea",
-  cursor: "pointer",
-  fontSize: 11,
-});
-
-const tableStyle = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: 12,
-};
-
-const thStyle = {
+  maxHeight: "65vh",     // 🔥 controls scroll height
+  overflowY: "auto",     // 🔥 vertical scroll
+  overflowX: "auto",     // optional horizontal scroll
+},
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: 12,
+  },
+  th: {
   textAlign: "left",
-  padding: "8px 12px",
+  padding: "12px 14px",
   color: "#4dd0e1",
-};
+  background: "rgba(0, 229, 255, 0.08)",
+  borderBottom: "1px solid rgba(0, 229, 255, 0.14)",
 
-const cell = {
-  padding: "10px 12px",
-  color: "#e0f7fa",
-};
-
-const statusStyle = (status) => ({
-  background: status?.includes("APPROVED")
-    ? "#00e67622"
-    : status?.includes("REJECTED")
-    ? "#ff525222"
-    : "#ffd70022",
-  color: status?.includes("APPROVED")
-    ? "#00e676"
-    : status?.includes("REJECTED")
-    ? "#ff5252"
-    : "#ffd700",
-  padding: "2px 8px",
-  borderRadius: 4,
-  fontSize: 10,
-  fontWeight: 700,
-});
-
-const actionBtn = {
-  background: "#00e5ff22",
-  border: "1px solid #00e5ff",
-  color: "#00e5ff",
-  borderRadius: 4,
-  padding: "4px 10px",
-  cursor: "pointer",
-  fontSize: 10,
-};
-
-const modalBackdrop = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.8)",
-  display: "flex",
-  justifyContent: "center",
-  alignItems: "center",
-  zIndex: 99999,
-};
-
-const modalBox = {
-  background: "#0d1b2a",
-  padding: 30,
-  borderRadius: 12,
-  width: 400,
-};
-
-const textareaStyle = {
-  width: "100%",
-  marginTop: 12,
-  padding: 10,
-  background: "#ffffff08",
-  border: "1px solid #00e5ff33",
-  borderRadius: 6,
-  color: "#e0f7fa",
-};
-
-const approveBtn = {
-  flex: 1,
-  background: "#00e67622",
-  border: "1px solid #00e676",
-  color: "#00e676",
-  padding: 10,
-  borderRadius: 6,
-  cursor: "pointer",
-};
-
-const rejectBtn = {
-  flex: 1,
-  background: "#ff525222",
-  border: "1px solid #ff5252",
-  color: "#ff5252",
-  padding: 10,
-  borderRadius: 6,
-  cursor: "pointer",
+  position: "sticky",   // 🔥 key
+  top: 0,               // 🔥 stick to top
+  zIndex: 2,
+},
+  row: {
+    borderBottom: "1px solid rgba(0, 229, 255, 0.08)",
+  },
+  cell: {
+    padding: "12px 14px",
+    color: "#e0f7fa",
+    verticalAlign: "top",
+  },
+  locationCell: {
+    minWidth: 220,
+    lineHeight: 1.6,
+  },
+  remarksCell: {
+    maxWidth: 260,
+    lineHeight: 1.6,
+  },
+  statusBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 700,
+  },
+  actionButton: {
+    background: "#00e5ff22",
+    border: "1px solid #00e5ff66",
+    color: "#00e5ff",
+    borderRadius: 8,
+    padding: "8px 12px",
+    fontSize: 11,
+  },
+  emptyState: {
+    padding: 24,
+    color: "#80deea",
+    textAlign: "center",
+  },
 };
 
 export default ApprovalsPage;

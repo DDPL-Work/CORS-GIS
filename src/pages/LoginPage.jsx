@@ -130,6 +130,7 @@ const set = (k, v) => {
   const inputStyle = { width: "100%", background: "#0d1b2a", border: "1px solid #00e5ff33", color: "#e0f7fa", borderRadius: 8, padding: "10px 14px", fontSize: 13, fontFamily: "monospace", boxSizing: "border-box", outline: "none" };
   const labelStyle = { color: "#4dd0e1", fontSize: 11, fontFamily: "monospace", letterSpacing: 1, display: "block", marginBottom: 5 };
 const selectedRoleConfig = ROLES.find(r => r.value === form.role);
+const signupRoles = ROLES.filter(r => r.value !== "ADMIN");
 const availableZones =
   selectedRoleConfig?.zones?.length > 0
     ? selectedRoleConfig.zones
@@ -421,7 +422,7 @@ const availableZones =
                 <div>
                   <label style={labelStyle}>ROLE</label>
                   <select value={form.role} onChange={e => set("role", e.target.value)} style={{ ...inputStyle, padding: "9px 12px" }}>
-{ROLES.map(role => (
+{signupRoles.map(role => (
   <option key={role.value} value={role.value}>
     {role.label}
   </option>

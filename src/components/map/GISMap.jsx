@@ -14,6 +14,7 @@ import {
   getStationsByRole,
   getLocationsByStations,
 } from "../../utils/roleUtils";
+import { getStatusDotColorForRole } from "../../utils/workflowStatus";
 import LeafletMap from "./LeafletMap";
 import SelectionGuide from "./SelectionGuide";
 import LocationComparisonPanel from "../panels/LocationComparisonPanel";
@@ -21,6 +22,12 @@ import LocationComparisonPanel from "../panels/LocationComparisonPanel";
 const GISMap = () => {
   const { state, dispatch } = useApp();
   const mapRef = useRef(null);
+  const compareBoxRef = useRef({
+    active: false,
+    startPoint: null,
+    boxEl: null,
+    cleanup: null,
+  });
   const layersRef = useRef({
     stations: [],
     locations: [],
@@ -86,7 +93,7 @@ const visibleStations = useMemo(() => {
         name: site.site_name,
         lat,
         lng,
-        status: site.status?.toLowerCase() || "pending",
+        status: site.status || "SUBMITTED",
         state: site.location_details?.state,
         district: site.location_details?.district,
         type: "station",
@@ -130,7 +137,7 @@ const visibleLocations = useMemo(() => {
         name: sub.location,
         lat,
         lng,
-        status: sub.status?.toLowerCase() || "pending",
+        status: sub.status || "SUBMITTED",
         stationName: site.site_name,
         type: "location",
         originalData: sub
@@ -181,8 +188,8 @@ const onMapReady = useCallback((map) => {
       state.mapTool !== "viewStations"
     ) {
       if (state.mapTool === "compare") {
-        // For compare, don't add click points, selection is via markers
-        mapRef.current.getContainer().style.cursor = "pointer";
+        // Compare mode uses drag-box selection instead of click selection.
+        mapRef.current.getContainer().style.cursor = "crosshair";
       } else {
         mapRef.current.on("click", (e) => {
           if (state.mapTool === "angle" && state.toolPoints.length >= 3) return;
@@ -256,6 +263,7 @@ const onMapReady = useCallback((map) => {
 
     const toolActive = state.mapTool && state.mapTool !== "view";
     const selectedEntityIds = state.toolPoints.map((p) => p.entityId);
+    const comparedIds = new Set((state.comparedLocations || []).map((location) => location.id));
 
     visibleStations.forEach((station) => {
       if (!station) return;
@@ -273,7 +281,9 @@ const onMapReady = useCallback((map) => {
         isNaN(lng)
       )
         return;
-      const isSelected = selectedEntityIds.includes(station.id);
+      const isSelected =
+        selectedEntityIds.includes(station.id) ||
+        (state.mapTool === "compare" && comparedIds.has(station.id));
       const isViewStations = state.viewStationsMode;
       const pulseRing = isSelected
         ? `<div style="position:absolute;inset:-6px;border-radius:50%;border:2px solid #ff9800;animation:pulse-ring 1.2s ease-out infinite;opacity:0.7"></div>`
@@ -285,9 +295,7 @@ const onMapReady = useCallback((map) => {
   ? "#2196f3"
 : station.type === "location"
 ? "#7c4dff"
-  : station.status === "active"
-  ? "#00e5ff"
-  : "#ff6b6b";
+  : getStatusDotColorForRole(station.status, state.auth.role);
       const icon = L.divIcon({
         className: "",
         html: `<div style="position:relative;width:${
@@ -318,6 +326,34 @@ const onMapReady = useCallback((map) => {
             }</span>`
           : "";
      const data = station.originalData || {};
+const stationName = data.site_name || station.name || "-";
+const stationState =
+  data.location_details?.state ||
+  data.state ||
+  data.location?.state ||
+  data.subsites?.find((sub) => sub?.location_details?.state)?.location_details?.state ||
+  "-";
+const stationDistrict =
+  data.location_details?.district ||
+  data.district ||
+  data.location?.district ||
+  data.subsites?.find((sub) => sub?.location_details?.district)?.location_details?.district ||
+  "-";
+const stationStatus = data.status || station.status || "-";
+const toDisplay = (value) => {
+  if (value === undefined || value === null) return "-";
+  const text = String(value).trim();
+  if (!text) return "-";
+  const lowered = text.toLowerCase();
+  if (lowered === "undefined" || lowered === "null" || lowered === "nan") return "-";
+  return text;
+};
+const establishedName = toDisplay(data.name || station.name);
+const establishedCode = toDisplay(data.code);
+const establishedLatitude = toDisplay(data.latitude ?? station.lat ?? station.latitude);
+const establishedLongitude = toDisplay(data.longitude ?? station.lng ?? station.longitude);
+const establishedHeightRaw = toDisplay(data.height);
+const establishedHeight = establishedHeightRaw === "-" ? "-" : `${establishedHeightRaw} m`;
 
 let tooltipHTML = "";
 
@@ -325,11 +361,11 @@ if (station.type === "established_station") {
 
 tooltipHTML = `
 <div style="line-height:1.5">
-<b>${data.name}</b><br>
-<b>Code:</b> ${data.code}<br>
-<b>Latitude:</b> ${data.latitude}<br>
-<b>Longitude:</b> ${data.longitude}<br>
-<b>Height:</b> ${data.height} m
+<b>${establishedName}</b><br>
+<b>Code:</b> ${establishedCode}<br>
+<b>Latitude:</b> ${establishedLatitude}<br>
+<b>Longitude:</b> ${establishedLongitude}<br>
+<b>Height:</b> ${establishedHeight}
 </div>
 `;
 
@@ -339,10 +375,10 @@ else if (station.type === "station") {
 
 tooltipHTML = `
 <div style="line-height:1.5">
-<b>${data.site_name}</b><br>
-<b>State:</b> ${data.location_details?.state || "-"}<br>
-<b>District:</b> ${data.location_details?.district || "-"}<br>
-<b>Status:</b> ${data.status || "-"}
+<b>${stationName}</b><br>
+<b>State:</b> ${stationState}<br>
+<b>District:</b> ${stationDistrict}<br>
+<b>Status:</b> ${stationStatus}
 </div>
 `;
 
@@ -353,19 +389,7 @@ marker.bindTooltip(tooltipHTML,{
   sticky:true
 });
 
- if (state.mapTool === "compare") {
-  marker.on("click", (e) => {
-    L.DomEvent.stopPropagation(e);
-
-    if (station.originalData) {
-      dispatch({
-        type: "ADD_COMPARE_LOCATION",
-        payload: station.originalData
-      });
-    }
-  });
-}
-else if (toolActive) {
+if (toolActive && state.mapTool !== "compare") {
   marker.on("click", (e) => {
     L.DomEvent.stopPropagation(e);
     addNamedPoint({
@@ -379,16 +403,31 @@ else if (toolActive) {
   });
 } else {
   marker.on("click", () => {
-  if (station.type === "location" && station.originalData) {
-    dispatch({
-      type: "SET_NOTIFICATION",
-      payload: {
-        type: "location_detail",
-        location: station.originalData,
-      },
-    });
-  }
-});
+    if (
+      station.type === "station" &&
+      station.originalData &&
+      state.auth.role === "SUPERVISOR"
+    ) {
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "station_action",
+          station: station.originalData,
+        },
+      });
+      return;
+    }
+
+    if (station.type === "location" && station.originalData) {
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "location_detail",
+          location: station.originalData,
+        },
+      });
+    }
+  });
 }
 
         layersRef.current.stations.push(marker);
@@ -429,13 +468,10 @@ if (station.type === "station") {
         isNaN(loc.lng)
       )
         return;
-      const colorMap = {
-        pending: "#ffd700",
-        approved: "#00e676",
-        rejected: "#ff5252",
-      };
-      const color = colorMap[loc.status] || "#836eb5";
-      const isSelected = selectedEntityIds.includes(loc.id);
+      const color = getStatusDotColorForRole(loc.status, state.auth.role);
+      const isSelected =
+        selectedEntityIds.includes(loc.id) ||
+        (state.mapTool === "compare" && comparedIds.has(loc.id));
 
       const icon = L.divIcon({
         className: "",
@@ -475,16 +511,37 @@ if (station.type === "station") {
             }</span>`
           : "";
       const locData = loc.originalData || {};
+const toDisplay = (value) => {
+  if (value === undefined || value === null) return "-";
+  const text = String(value).trim();
+  if (!text) return "-";
+  const lowered = text.toLowerCase();
+  if (lowered === "undefined" || lowered === "null" || lowered === "nan") return "-";
+  return text;
+};
+const locationState =
+  toDisplay(locData.location_details?.state || locData.state);
+const locationDistrict =
+  toDisplay(locData.location_details?.district || locData.district);
+const locationName = toDisplay(locData.location || loc.name);
+const stationName = toDisplay(loc.stationName);
+const statusLabel = toDisplay(loc.status);
+const latitudeLabel = toDisplay(
+  Number.isFinite(loc.lat) ? loc.lat.toFixed(5) : loc.lat
+);
+const longitudeLabel = toDisplay(
+  Number.isFinite(loc.lng) ? loc.lng.toFixed(5) : loc.lng
+);
 
 marker.bindTooltip(`
 <div style="line-height:1.5">
-<b>${locData.location}</b><br>
-<b>Station:</b> ${loc.stationName || "-"}<br>
-<b>State:</b> ${locData.location_details?.state || "-"}<br>
-<b>District:</b> ${locData.location_details?.district || "-"}<br>
-<b>Latitude:</b> ${loc.lat.toFixed(5)}<br>
-<b>Longitude:</b> ${loc.lng.toFixed(5)}<br>
-<b>Status:</b> ${loc.status}
+<b>${locationName}</b><br>
+<b>Station:</b> ${stationName}<br>
+<b>State:</b> ${locationState}<br>
+<b>District:</b> ${locationDistrict}<br>
+<b>Latitude:</b> ${latitudeLabel}<br>
+<b>Longitude:</b> ${longitudeLabel}<br>
+<b>Status:</b> ${statusLabel}
 </div>
 `,{
   className:"gis-tooltip",
@@ -503,14 +560,7 @@ marker.bindTooltip(`
               entityType: "location",
             });
           });
-        } else if (state.mapTool === "compare") {
-          marker.on("click", (e) => {
-            L.DomEvent.stopPropagation(e);
-dispatch({
-  type: "ADD_COMPARE_LOCATION",
-  payload: loc.originalData || loc
-});      });
-        } else {
+        } else if (state.mapTool !== "compare") {
     marker.on("click", () => {
   dispatch({
     type: "SET_NOTIFICATION",
@@ -531,9 +581,155 @@ dispatch({
     visibleStations,
     visibleLocations,
     state.mapTool,
+    state.comparedLocations,
     state.toolPoints,
+    state.auth.role,
     mapReady,
   ]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+
+    const map = mapRef.current;
+    const container = map.getContainer();
+    const L = window.L;
+    if (!L) return;
+
+    const compareState = compareBoxRef.current;
+
+    const removeBox = () => {
+      if (compareState.boxEl?.parentNode) {
+        compareState.boxEl.parentNode.removeChild(compareState.boxEl);
+      }
+      compareState.boxEl = null;
+    };
+
+    const stopDrawing = () => {
+      compareState.active = false;
+      compareState.startPoint = null;
+      removeBox();
+      document.body.style.userSelect = "";
+    };
+
+    if (compareState.cleanup) {
+      compareState.cleanup();
+      compareState.cleanup = null;
+    }
+
+    if (state.mapTool !== "compare") {
+      if (map.dragging?.enable) {
+        map.dragging.enable();
+      }
+      stopDrawing();
+      container.style.cursor = "";
+      return;
+    }
+
+    if (map.dragging?.disable) {
+      map.dragging.disable();
+    }
+    container.style.cursor = "crosshair";
+
+    const createBox = () => {
+      const box = document.createElement("div");
+      box.style.position = "absolute";
+      box.style.border = "1px solid #00e5ff";
+      box.style.background = "rgba(0, 229, 255, 0.16)";
+      box.style.boxShadow = "0 0 0 1px rgba(0, 229, 255, 0.22)";
+      box.style.pointerEvents = "none";
+      box.style.zIndex = "700";
+      container.appendChild(box);
+      compareState.boxEl = box;
+    };
+
+    const updateBox = (start, current) => {
+      if (!compareState.boxEl) createBox();
+      const left = Math.min(start.x, current.x);
+      const top = Math.min(start.y, current.y);
+      const width = Math.abs(current.x - start.x);
+      const height = Math.abs(current.y - start.y);
+
+      compareState.boxEl.style.left = `${left}px`;
+      compareState.boxEl.style.top = `${top}px`;
+      compareState.boxEl.style.width = `${width}px`;
+      compareState.boxEl.style.height = `${height}px`;
+    };
+
+    const handlePointerDown = (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest(".leaflet-control-container")) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      compareState.active = true;
+      compareState.startPoint = map.mouseEventToContainerPoint(event);
+      document.body.style.userSelect = "none";
+      createBox();
+      updateBox(compareState.startPoint, compareState.startPoint);
+    };
+
+    const handlePointerMove = (event) => {
+      if (!compareState.active || !compareState.startPoint) return;
+
+      const currentPoint = map.mouseEventToContainerPoint(event);
+      updateBox(compareState.startPoint, currentPoint);
+    };
+
+    const handlePointerUp = (event) => {
+      if (!compareState.active || !compareState.startPoint) return;
+
+      const endPoint = map.mouseEventToContainerPoint(event);
+      const dx = Math.abs(endPoint.x - compareState.startPoint.x);
+      const dy = Math.abs(endPoint.y - compareState.startPoint.y);
+
+      if (dx < 4 && dy < 4) {
+        stopDrawing();
+        return;
+      }
+
+      const southWest = map.containerPointToLatLng([
+        Math.min(compareState.startPoint.x, endPoint.x),
+        Math.max(compareState.startPoint.y, endPoint.y),
+      ]);
+      const northEast = map.containerPointToLatLng([
+        Math.max(compareState.startPoint.x, endPoint.x),
+        Math.min(compareState.startPoint.y, endPoint.y),
+      ]);
+      const bounds = L.latLngBounds(southWest, northEast);
+
+      const selectedLocations = visibleLocations
+        .filter((location) => bounds.contains([location.lat, location.lng]))
+        .map((location) => location.originalData || location);
+
+      dispatch({
+        type: "ADD_COMPARE_LOCATIONS",
+        payload: selectedLocations,
+      });
+
+      stopDrawing();
+    };
+
+    container.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    compareState.cleanup = () => {
+      container.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      stopDrawing();
+    };
+
+    return () => {
+      compareState.cleanup?.();
+      compareState.cleanup = null;
+      if (map.dragging?.enable) {
+        map.dragging.enable();
+      }
+      container.style.cursor = "";
+    };
+  }, [dispatch, mapReady, state.mapTool, visibleLocations]);
 
   // Tool layers rendering (distance/angle overlays)
   useEffect(() => {

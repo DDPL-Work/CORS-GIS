@@ -2,10 +2,59 @@ import { useApp } from '../../context/AppContext';
 
 const SelectionGuide = () => {
   const { state, dispatch } = useApp();
+  const isCompareMode = state.mapTool === "compare";
   const pts = state.toolPoints;
   const maxPts = state.mapTool === "angle" ? 3 : null;
   const colors = ["#ff9800", "#e040fb", "#00e5ff"];
-  const toolColor = state.mapTool === "angle" ? "#e040fb" : "#ff9800";
+  const toolColor = isCompareMode ? "#00e5ff" : state.mapTool === "angle" ? "#e040fb" : "#ff9800";
+
+  if (isCompareMode) {
+    return (
+      <div style={{
+        position: "absolute",
+        top: 14,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 900,
+        background: "rgba(13,27,42,0.96)",
+        border: `1px solid ${toolColor}66`,
+        borderRadius: 10,
+        padding: "8px 16px",
+        fontFamily: "monospace",
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        boxShadow: `0 4px 20px ${toolColor}33`,
+        maxWidth: 700,
+      }}>
+        <span style={{ fontSize: 14 }}>[]</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ color: "#e0f7fa", fontSize: 11 }}>
+            Left-click and drag to draw a selection rectangle around locations.
+          </span>
+          <span style={{ color: "#80deea", fontSize: 10 }}>
+            {state.comparedLocations.length} location(s) ready to compare
+          </span>
+        </div>
+        <div
+          style={{
+            cursor: "pointer",
+            color: "#ff6b6b",
+            fontSize: 10,
+            border: "1px solid #ff444444",
+            borderRadius: 4,
+            padding: "2px 8px",
+            marginLeft: 4,
+            background: "#ff444411",
+            flexShrink: 0,
+          }}
+          onClick={() => dispatch({ type: "CLEAR_COMPARE" })}
+        >
+          Clear
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{

@@ -2,12 +2,42 @@ import React, { useMemo, useState, useEffect, useRef } from "react";
 import { useApp } from "../../context/AppContext";
 import { calculateDistance } from "../../utils/geoUtils";
 import { createPortal } from "react-dom";
+import DraggablePanel from "../layout/DraggablePanel";
 import {
   directorDecision,
   zonalDecision,
   gnrbDecision,
-  sendToZonal
+  updateDirectorSubsite,
+  updateSupervisorSubsite,
+  supervisorSubsiteDecision,
 } from "../../api/hierarchyApi";
+import {
+  findParentSiteBySubsiteId,
+  findSubsiteById,
+  reloadHierarchySites,
+} from "../../utils/hierarchyHelpers";
+import {
+  canRoleSubmitToNextLevel,
+  canRoleTakeSubsiteAction,
+  getStatusStyleForRole,
+  isFinalApprovedStatus,
+  normalizeWorkflowStatus,
+} from "../../utils/workflowStatus";
+
+const getErrorMessage = (err, fallback) => {
+  const message = String(err?.message || "").trim();
+  return message || fallback;
+};
+
+const getInvalidStateMessageForRole = (role) => {
+  if (role === "ZONAL_CHIEF") {
+    return "Invalid state. Director must send the location to zonal first (send-to-zonal) before zonal approval/rejection.";
+  }
+  if (role === "GNRB") {
+    return "Invalid state. GNRB can act after Zonal Chief approval or when status is SENT_TO_GNRB.";
+  }
+  return "Invalid state for this action.";
+};
 /* ---------------- NORMALIZE LOCATION ---------------- */
 /* ---------------- NORMALIZE LOCATION ---------------- */
 const normalizeLocation = (loc) => {
@@ -29,6 +59,7 @@ const normalizeLocation = (loc) => {
 
     /* BASIC */
     site_name: data.site_name ?? loc.site_name ?? null,
+    survey_id: data.survey_id ?? loc.survey_id ?? null,
     surveyor_name: data.surveyor_name ?? null,
     supervisor_name: data.supervisor_name ?? null,
     contact_details: data.contact_details ?? null,
@@ -85,14 +116,13 @@ const LocationComparisonPanel = () => {
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [remarks, setRemarks] = useState("");
   const [priority, setPriority] = useState(2);
+  const [nocFile, setNocFile] = useState(null);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-console.log("Compared Locations:", state.comparedLocations);
   const locations = (state.comparedLocations || []).map(normalizeLocation);
-
-  const canApprove = ["DIRECTOR", "ZONAL_CHIEF", "GNRB", "ADMIN"].includes(
-    state.auth?.role
-  );
+  const role = state.auth?.role;
+  const isSupervisor = role === "SUPERVISOR";
+  const isDirector = role === "DIRECTOR";
 
   /* ---------------- IMAGE VIEWER FUNCTIONS ---------------- */
   const openViewer = (images, index = 0) => {
@@ -160,7 +190,7 @@ console.log("Compared Locations:", state.comparedLocations);
   /* ---------------- APPROVAL MODAL HANDLERS ---------------- */
  const openApprovalModal = (location) => {
 
-  if (location.status === "FINAL_APPROVED") {
+  if (isFinalApprovedStatus(location.status)) {
     dispatch({
       type: "SET_NOTIFICATION",
       payload: {
@@ -175,27 +205,88 @@ console.log("Compared Locations:", state.comparedLocations);
   setSelectedLocation(location);
   setRemarks(location.remarks || "");
   setPriority(location.priority || 2);
+  setNocFile(null);
   setShowApprovalModal(true);
 };
 
   const closeApprovalModal = () => {
     setSelectedLocation(null);
+    setNocFile(null);
     setShowApprovalModal(false);
   };
+const syncComparedSelections = (hierarchySites) => {
+  const refreshedSelections = (state.comparedLocations || [])
+    .map((location) => findSubsiteById(hierarchySites, location.id))
+    .filter(Boolean);
+
+  dispatch({
+    type: "ADD_COMPARE_LOCATIONS",
+    payload: refreshedSelections,
+  });
+};
 const handleApproval = async (status) => {
 
   if (!selectedLocation) return;
 
   const token = state.auth.token;
-  const role = state.auth.role;
 
   const decision = status === "APPROVED" ? "APPROVE" : "REJECT";
 
   setIsSubmitting(true);
 
   try {
+    if (isSupervisor) {
+      const parentSite =
+        selectedLocation.survey_id
+          ? { id: selectedLocation.survey_id }
+          : findParentSiteBySubsiteId(state.hierarchySites, selectedLocation.id);
+      const parentSurveyId = parentSite?.id;
 
-    if (selectedLocation.status === "FINAL_APPROVED") {
+      if (!parentSurveyId) {
+        throw new Error("Parent station not found");
+      }
+
+      if (
+        priority !== Number(selectedLocation.priority || 2) ||
+        remarks !== (selectedLocation.remarks || "") ||
+        nocFile
+      ) {
+        await updateSupervisorSubsite(token, parentSurveyId, {
+          subsiteId: selectedLocation.id,
+          remarks,
+          priority,
+          nocFile,
+        });
+      }
+
+      await supervisorSubsiteDecision(
+        token,
+        parentSurveyId,
+        selectedLocation.id,
+        decision,
+        remarks
+      );
+
+      const hierarchy = await reloadHierarchySites(dispatch, token, role);
+      syncComparedSelections(hierarchy);
+
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message:
+            decision === "APPROVE"
+              ? "Location approved successfully"
+              : "Location rejected successfully",
+          color: decision === "APPROVE" ? "#10b981" : "#ef4444"
+        }
+      });
+
+      closeApprovalModal();
+      return;
+    }
+
+    if (isFinalApprovedStatus(selectedLocation.status)) {
       dispatch({
         type: "SET_NOTIFICATION",
         payload: {
@@ -207,25 +298,28 @@ const handleApproval = async (status) => {
       return;
     }
 
+    if (!canRoleTakeSubsiteAction(role, selectedLocation.status)) {
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message: "This location is not in actionable status for your role.",
+          color: "#f59e0b"
+        }
+      });
+      return;
+    }
+
     if (role === "DIRECTOR") {
-
       await directorDecision(token, selectedLocation.id, decision, remarks);
-
-      if (decision === "APPROVE") {
-        await sendToZonal(token, selectedLocation.id);
-      }
-
-    }
-
-    if (role === "ZONAL_CHIEF") {
+    } else if (role === "ZONAL_CHIEF") {
       await zonalDecision(token, selectedLocation.id, decision, remarks);
-    }
-
-    if (role === "GNRB") {
+    } else if (role === "GNRB") {
       await gnrbDecision(token, selectedLocation.id, decision, remarks);
     }
 
-    dispatch({ type: "REFETCH_HIERARCHY" });
+    const hierarchy = await reloadHierarchySites(dispatch, token, role);
+    syncComparedSelections(hierarchy);
 
     dispatch({
       type: "SET_NOTIFICATION",
@@ -244,12 +338,15 @@ const handleApproval = async (status) => {
   } catch (err) {
 
     console.error("Approval error:", err);
+    const invalidStateMessage =
+      /invalid state/i.test(String(err?.message || "")) &&
+      getInvalidStateMessageForRole(role);
 
     dispatch({
       type: "SET_NOTIFICATION",
       payload: {
         type: "toast",
-        message: "Approval failed",
+        message: invalidStateMessage || getErrorMessage(err, "Approval failed"),
         color: "#ef4444"
       }
     });
@@ -261,12 +358,83 @@ const handleApproval = async (status) => {
   }
 };
 
+const handleSubmitToZonal = async () => {
+  if (!selectedLocation || !isDirector) return;
+
+  if ((state.comparedLocations || []).length > 1) {
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "toast",
+        message: "Director can submit only one location at a time to Zonal Chief.",
+        color: "#f59e0b"
+      }
+    });
+    return;
+  }
+
+  if (!canRoleSubmitToNextLevel(role, selectedLocation.status)) {
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "toast",
+        message: "Only Director-approved locations can be submitted to Zonal Chief.",
+        color: "#f59e0b"
+      }
+    });
+    return;
+  }
+
+  setIsSubmitting(true);
+
+  try {
+    await updateDirectorSubsite(state.auth.token, selectedLocation.id, {
+      priority,
+      remarks,
+      nocFile,
+    });
+    const hierarchy = await reloadHierarchySites(dispatch, state.auth.token, role);
+    syncComparedSelections(hierarchy);
+
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "toast",
+        message: "Location submitted to Zonal Chief successfully.",
+        color: "#10b981"
+      }
+    });
+    closeApprovalModal();
+  } catch (err) {
+    console.error("Send to zonal failed:", err);
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "toast",
+        message: getErrorMessage(err, "Submit to Zonal failed"),
+        color: "#ef4444"
+      }
+    });
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
 
   const buildImageUrl = (path) => {
     if (!path) return null;
     if (path.startsWith("http")) return path;
     return `${BASE_URL}${path}`;
   };
+
+  const selectedCanTakeAction = selectedLocation
+    ? canRoleTakeSubsiteAction(role, selectedLocation.status)
+    : false;
+  const selectedCanSubmitToZonal = selectedLocation
+    ? canRoleSubmitToNextLevel(role, selectedLocation.status)
+    : false;
+  const isSingleSelectionForDirectorSubmit =
+    (state.comparedLocations || []).length <= 1;
 
   /* -------------------- DISTANCE MATRIX -------------------- */
   const distanceMatrix = useMemo(() => {
@@ -379,15 +547,12 @@ const handleApproval = async (status) => {
   /* ---------------- STYLES ---------------- */
   const styles = {
     panel: {
-      position: "fixed",
-      bottom: 10,
-      left: "50%",
-      transform: "translateX(-50%)",
       background: "linear-gradient(145deg, #0a1929 0%, #0d2135 100%)",
       border: "1px solid rgba(0, 229, 255, 0.2)",
       borderRadius: 16,
-      padding: 20,
       width: "75%",
+      minWidth: 700,
+      minHeight: 320,
       maxWidth: 1600,
       maxHeight: "60vh",
       overflow: "hidden",
@@ -565,6 +730,8 @@ const handleApproval = async (status) => {
       borderRadius: 20,
       padding: 32,
       width: 500,
+      minWidth: 420,
+      minHeight: 320,
       maxWidth: "90vw",
       maxHeight: "85vh",
       overflowY: "auto",
@@ -678,21 +845,13 @@ const handleApproval = async (status) => {
       </span>
     )},
     { label: "Status", render: (loc) => {
-      const statusColors = {
-        "FINAL_APPROVED": { bg: "rgba(16, 185, 129, 0.2)", color: "#10b981" },
-        "SUPERVISOR_APPROVED": { bg: "rgba(59, 130, 246, 0.2)", color: "#3b82f6" },
-        "APPROVED": { bg: "rgba(16, 185, 129, 0.2)", color: "#10b981" },
-        "REJECTED": { bg: "rgba(239, 68, 68, 0.2)", color: "#ef4444" },
-        "PENDING": { bg: "rgba(245, 158, 11, 0.2)", color: "#f59e0b" },
-        "SUBMITTED": { bg: "rgba(245, 158, 11, 0.2)", color: "#f59e0b" }
-      };
-      const status = loc.status || "PENDING";
-      const colors = statusColors[status] || { bg: "rgba(255, 255, 255, 0.2)", color: "#fff" };
+      const status = normalizeWorkflowStatus(loc.status || "PENDING");
+      const colors = getStatusStyleForRole(status, role);
       
       return (
         <span style={{
           ...styles.badge,
-          background: colors.bg,
+          background: colors.background,
           color: colors.color
         }}>
           {status}
@@ -937,7 +1096,7 @@ const handleApproval = async (status) => {
       label: "Actions", 
       render: (loc) => (
         <div style={{ display: "flex", gap: 4, flexDirection: "column" }}>
-{canApprove && loc.status !== "FINAL_APPROVED" && (            <button
+{(canRoleTakeSubsiteAction(role, loc.status) || (isDirector && canRoleSubmitToNextLevel(role, loc.status))) && (            <button
               onClick={() => openApprovalModal(loc)}
               style={styles.actionBtn}
               onMouseEnter={(e) => {
@@ -975,8 +1134,19 @@ const handleApproval = async (status) => {
   return (
     <>
       <style>{scrollbarStyles}</style>
-      
-      <div style={styles.panel}>
+
+      <DraggablePanel
+        title="COMPARE LOCATIONS"
+        handleColor="#00e5ff"
+      position="fixed"
+      bounds="viewport"
+      initialAnchor="center-bottom"
+      offsetX={0}
+      offsetY={10}
+      resizable
+      style={styles.panel}
+      bodyStyle={{ padding: 20 }}
+      >
         {/* Header */}
         <div style={styles.header}>
           <div style={styles.title}>
@@ -1049,12 +1219,24 @@ const handleApproval = async (status) => {
             ))}
           </div>
         )}
-      </div>
+      </DraggablePanel>
 
       {/* Approval Modal */}
       {showApprovalModal && selectedLocation && createPortal(
         <div style={styles.modalOverlay} onClick={closeApprovalModal}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+          <DraggablePanel
+            title="APPROVAL MODAL"
+            handleColor="#00e5ff"
+            position="fixed"
+            bounds="viewport"
+            initialAnchor="center"
+            offsetX={0}
+            offsetY={0}
+            resizable
+            style={styles.modal}
+            bodyStyle={{ overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 24 }}>
               <div style={{ color: "#00e5ff", fontSize: 20, fontWeight: 700 }}>
                 ⚖️ {selectedLocation.site_name || selectedLocation.location}
@@ -1095,13 +1277,14 @@ const handleApproval = async (status) => {
               />
             </div>
 
-            <div style={{ marginBottom: 24 }}>
+            {isDirector && <div style={{ marginBottom: 24 }}>
               <label style={{ color: "#80deea", display: "block", marginBottom: 8 }}>
                 Priority
               </label>
               <select
                 value={priority}
                 onChange={(e) => setPriority(Number(e.target.value))}
+                disabled={isSubmitting || (!selectedCanTakeAction && !selectedCanSubmitToZonal)}
                 style={{
                   width: "100%",
                   padding: "12px",
@@ -1116,12 +1299,37 @@ const handleApproval = async (status) => {
                 <option value={2}>🟡 Medium Priority (2)</option>
                 <option value={3}>🟢 Low Priority (3)</option>
               </select>
-            </div>
+            </div>}
+
+            {(isSupervisor || isDirector) && (
+              <div style={{ marginBottom: 24 }}>
+                <label style={{ color: "#80deea", display: "block", marginBottom: 8 }}>
+                  NOC Upload
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setNocFile(e.target.files?.[0] || null)}
+                  disabled={
+                    isSubmitting ||
+                    (isSupervisor
+                      ? selectedLocation.status !== "SUBMITTED"
+                      : !selectedCanTakeAction && !selectedCanSubmitToZonal)
+                  }
+                  style={{ color: "#e0f7fa", fontSize: 12 }}
+                />
+                {nocFile && (
+                  <div style={{ marginTop: 8, color: "#00e5ff", fontSize: 12 }}>
+                    Selected file: {nocFile.name}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: "flex", gap: 12 }}>
               <button
                 onClick={() => handleApproval("APPROVED")}
-disabled={isSubmitting || selectedLocation.status === "FINAL_APPROVED"}        
+                disabled={isSubmitting || !selectedCanTakeAction}
         style={{
                   flex: 1,
                   background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
@@ -1139,7 +1347,7 @@ disabled={isSubmitting || selectedLocation.status === "FINAL_APPROVED"}
               </button>
               <button
                 onClick={() => handleApproval("REJECTED")}
-disabled={isSubmitting || selectedLocation.status === "FINAL_APPROVED"}    
+                disabled={isSubmitting || !selectedCanTakeAction}
             style={{
                   flex: 1,
                   background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
@@ -1156,7 +1364,43 @@ disabled={isSubmitting || selectedLocation.status === "FINAL_APPROVED"}
                 {isSubmitting ? "Processing..." : "✕ REJECT"}
               </button>
             </div>
-          </div>
+            {isDirector && (
+              <div style={{ marginTop: 12 }}>
+                <button
+                  onClick={handleSubmitToZonal}
+                  disabled={
+                    isSubmitting ||
+                    !selectedCanSubmitToZonal ||
+                    !isSingleSelectionForDirectorSubmit
+                  }
+                  style={{
+                    width: "100%",
+                    background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+                    border: "none",
+                    color: "#fff",
+                    padding: "14px",
+                    borderRadius: 8,
+                    fontWeight: 600,
+                    cursor: isSubmitting ? "not-allowed" : "pointer",
+                    opacity:
+                      isSubmitting ||
+                      !selectedCanSubmitToZonal ||
+                      !isSingleSelectionForDirectorSubmit
+                        ? 0.65
+                        : 1,
+                    transition: "all 0.2s ease"
+                  }}
+                >
+                  {isSubmitting ? "Processing..." : "Submit To Zonal Chief"}
+                </button>
+                {!isSingleSelectionForDirectorSubmit && (
+                  <div style={{ marginTop: 8, color: "#f59e0b", fontSize: 12 }}>
+                    Keep only one compared location selected to submit to Zonal Chief.
+                  </div>
+                )}
+              </div>
+            )}
+          </DraggablePanel>
         </div>,
         document.body
       )}

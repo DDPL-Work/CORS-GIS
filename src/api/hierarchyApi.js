@@ -3,6 +3,23 @@
 
 const BASE = "https://survey.drdesigntech.com/api";
 
+const throwApiError = async (res, fallbackMessage) => {
+  let message = fallbackMessage;
+
+  try {
+    const data = await res.json();
+    message =
+      data?.error ||
+      data?.detail ||
+      data?.message ||
+      fallbackMessage;
+  } catch {
+    // Keep the fallback message when response body is not JSON.
+  }
+
+  throw new Error(message);
+};
+
 /* ---------------- FETCH DATA BY ROLE ---------------- */
 
 export const fetchHierarchySites = async (token, role) => {
@@ -20,7 +37,7 @@ export const fetchHierarchySites = async (token, role) => {
     },
   });
 
-  if (!res.ok) throw new Error("Failed to fetch hierarchy data");
+  if (!res.ok) await throwApiError(res, "Failed to fetch hierarchy data");
 
   return res.json();
 };
@@ -35,7 +52,7 @@ export const supervisorDecision = async (
 ) => {
 
   const res = await fetch(
-    `${BASE}/survey/${surveyId}/supervisor/`,
+    `${BASE}/survey/${surveyId}/supervisor/submit/`,
     {
       method: "POST",
       headers: {
@@ -49,7 +66,7 @@ export const supervisorDecision = async (
     }
   );
 
-  if (!res.ok) throw new Error("Supervisor action failed");
+  if (!res.ok) await throwApiError(res, "Supervisor action failed");
 
   return res.json();
 };
@@ -62,23 +79,90 @@ export const updateSubsitePriority = async (
   subsiteId,
   priority
 ) => {
+  return updateSupervisorSubsite(token, surveyId, {
+    subsiteId,
+    priority,
+  });
+};
+
+export const updateSupervisorSubsite = async (
+  token,
+  surveyId,
+  { subsiteId, remarks, priority, nocFile }
+) => {
+  const formData = new FormData();
+
+  formData.append("subsite_id", subsiteId);
+
+  if (typeof priority === "number") {
+    formData.append("priority", String(priority));
+  }
+
+  if (typeof remarks === "string") {
+    formData.append("remark", remarks);
+    formData.append("remarks", remarks);
+  }
+
+  if (nocFile) {
+    formData.append("NOC", nocFile);
+  }
 
   const res = await fetch(
     `${BASE}/survey/${surveyId}/supervisor/`,
     {
       method: "PUT",
       headers: {
+        Authorization: `Token ${token}`,
+      },
+      body: formData,
+    }
+  );
+
+  if (!res.ok) await throwApiError(res, "Supervisor subsite update failed");
+
+  return res.json();
+};
+
+export const submitSupervisorSurvey = async (token, surveyId) => {
+  const res = await fetch(
+    `${BASE}/survey/${surveyId}/supervisor/submit/`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${token}`,
+      },
+    }
+  );
+
+  if (!res.ok) await throwApiError(res, "Supervisor submit failed");
+
+  return res.json();
+};
+
+export const supervisorSubsiteDecision = async (
+  token,
+  surveyId,
+  subsiteId,
+  decision,
+  remarks
+) => {
+  const res = await fetch(
+    `${BASE}/survey/${surveyId}/supervisor/`,
+    {
+      method: "POST",
+      headers: {
         "Content-Type": "application/json",
         Authorization: `Token ${token}`,
       },
       body: JSON.stringify({
         subsite_id: subsiteId,
-        priority: priority
+        decision,
+        remarks,
       }),
     }
   );
 
-  if (!res.ok) throw new Error("Priority update failed");
+  if (!res.ok) await throwApiError(res, "Supervisor subsite decision failed");
 
   return res.json();
 };
@@ -107,7 +191,7 @@ export const directorDecision = async (
     }
   );
 
-  if (!res.ok) throw new Error("Director decision failed");
+  if (!res.ok) await throwApiError(res, "Director decision failed");
 
   return res.json();
 };
@@ -136,7 +220,7 @@ export const zonalDecision = async (
     }
   );
 
-  if (!res.ok) throw new Error("Zonal decision failed");
+  if (!res.ok) await throwApiError(res, "Zonal decision failed");
 
   return res.json();
 };
@@ -165,7 +249,7 @@ export const gnrbDecision = async (
     }
   );
 
-  if (!res.ok) throw new Error("GNRB decision failed");
+  if (!res.ok) await throwApiError(res, "GNRB decision failed");
 
   return res.json();
 };
@@ -184,10 +268,50 @@ export const sendToZonal = async (token, subsiteId) => {
     }
   );
 
-  if (!res.ok) throw new Error("Failed to send to zonal");
+  if (!res.ok) await throwApiError(res, "Failed to send to zonal");
 
   return res.json();
 };
 
+export const updateDirectorSubsite = async (
+  token,
+  subsiteId,
+  { remarks, priority, nocFile } = {}
+) => {
+  const hasPriority = typeof priority === "number";
+  const hasRemarks = typeof remarks === "string" && remarks.trim().length > 0;
+  const hasNoc = Boolean(nocFile);
 
+  if (!hasPriority && !hasRemarks && !hasNoc) {
+    return sendToZonal(token, subsiteId);
+  }
 
+  const formData = new FormData();
+
+  if (hasPriority) {
+    formData.append("priority", String(priority));
+  }
+
+  if (typeof remarks === "string") {
+    formData.append("remarks", remarks);
+  }
+
+  if (hasNoc) {
+    formData.append("noc", nocFile);
+  }
+
+  const res = await fetch(
+    `${BASE}/subsite/${subsiteId}/send-to-zonal/`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${token}`,
+      },
+      body: formData,
+    }
+  );
+
+  if (!res.ok) await throwApiError(res, "Director subsite update failed");
+
+  return res.json();
+};

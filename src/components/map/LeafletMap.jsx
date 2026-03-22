@@ -6,7 +6,6 @@ const LeafletMap = ({ onMapReady }) => {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-
     const loadLeaflet = () => {
       if (window.L) {
         initMap();
@@ -15,13 +14,11 @@ const LeafletMap = ({ onMapReady }) => {
 
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href =
-        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
       document.head.appendChild(link);
 
       const script = document.createElement("script");
-      script.src =
-        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
       script.onload = initMap;
       document.head.appendChild(script);
     };
@@ -32,27 +29,22 @@ const LeafletMap = ({ onMapReady }) => {
       const L = window.L;
 
       const map = L.map(mapRef.current, {
-        center: [22.5937, 78.9629], // India center
+        center: [22.5937, 78.9629],
         zoom: 5,
         zoomControl: true,
       });
 
-      // Mappls India Tiles
-      // L.tileLayer(
-      //   "https://apis.mappls.com/advancedmaps/v1/4b2825e6cf775ac9cd36d344c8b983cb/map_tile/{z}/{x}/{y}.png",
-      //   {
-      //     attribution: "© Mappls | Survey of India – ReKHAnS",
-      //     maxZoom: 18,
-      //   }
-      // ).addTo(map);
-L.tileLayer(
- "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
- {
-   attribution: "© OpenStreetMap",
-   maxZoom: 19
- }
-).addTo(map);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap",
+        maxZoom: 19,
+      }).addTo(map);
+
       mapInstanceRef.current = map;
+
+      // 🔥 CRITICAL FIX: ensure correct initial sizing
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 0);
 
       if (onMapReady) {
         onMapReady(map);
@@ -71,11 +63,47 @@ L.tileLayer(
     };
   }, []);
 
+  // ✅ AUTO FIX: Detect container resize (sidebar toggle, layout change)
+  useEffect(() => {
+    if (!mapRef.current) return;
+
+    const observer = new ResizeObserver(() => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+      }
+    });
+
+    observer.observe(mapRef.current);
+
+    return () => observer.disconnect();
+  }, []);
+
+  // ✅ EXTRA SAFETY: window resize
+  useEffect(() => {
+    const handleResize = () => {
+      mapInstanceRef.current?.invalidateSize();
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        overflow: "hidden", // 🔥 prevents visual gaps
+      }}
+    >
       <div
         ref={mapRef}
-        style={{ width: "100%", height: "100%", background: "#1a2332" }}
+        style={{
+          width: "100%",
+          height: "100%",
+          background: "#1a2332",
+        }}
       />
 
       {!ready && (

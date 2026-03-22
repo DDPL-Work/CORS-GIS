@@ -1,14 +1,41 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../../context/AppContext";
+import DraggablePanel from "../layout/DraggablePanel";
 import {
   directorDecision,
+  supervisorSubsiteDecision,
   zonalDecision,
   gnrbDecision,
-  sendToZonal,
-  updateSubsitePriority
+  updateDirectorSubsite,
+  updateSupervisorSubsite
 } from "../../api/hierarchyApi";
+import {
+  findParentSiteBySubsiteId,
+  reloadHierarchySites,
+} from "../../utils/hierarchyHelpers";
+import {
+  canRoleSubmitToNextLevel,
+  canRoleTakeSubsiteAction,
+  getStatusStyleForRole,
+  isFinalApprovedStatus,
+} from "../../utils/workflowStatus";
 const BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+const getErrorMessage = (err, fallback) => {
+  const message = String(err?.message || "").trim();
+  return message || fallback;
+};
+
+const getInvalidStateMessageForRole = (role) => {
+  if (role === "ZONAL_CHIEF") {
+    return "Invalid state. Director must send the location to zonal first (send-to-zonal) before zonal approval/rejection.";
+  }
+  if (role === "GNRB") {
+    return "Invalid state. GNRB can act after Zonal Chief approval or when status is SENT_TO_GNRB.";
+  }
+  return "Invalid state for this action.";
+};
 
 const buildImageUrl = (path) => {
   if (!path) return null;
@@ -37,6 +64,7 @@ const LocationModal = () => {
   /* ---------------- FORM STATE ---------------- */
   const [remarks, setRemarks] = useState("");
   const [priority, setPriority] = useState(2);
+  const [nocFile, setNocFile] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   /* ---------------- ENTRY ANIMATION ---------------- */
@@ -52,6 +80,7 @@ const LocationModal = () => {
     if (loc) {
       setRemarks(loc.remarks || "");
       setPriority(loc.priority || 2);
+      setNocFile(null);
     }
   }, [loc]);
 
@@ -158,121 +187,195 @@ const LocationModal = () => {
     setIsFullscreen(!isFullscreen);
   };
 
-const updatePriority = async () => {
-
-  const token = state.auth.token;
-
-  try {
-
-    setIsSubmitting(true);
-
-  await updateSubsitePriority(
-  token,
-  loc.survey_id,   // parent survey id
-  loc.id,          // subsite id
-  priority
-);
-
-    dispatch({
-      type: "SET_NOTIFICATION",
-      payload: {
-        type: "toast",
-        message: "Priority updated successfully",
-        color: "#10b981"
-      }
-    });
-
-    dispatch({ type: "REFETCH_HIERARCHY" });
-
-    handleClose();
-
-  } catch (err) {
-
-    console.error(err);
-
-    dispatch({
-      type: "SET_NOTIFICATION",
-      payload: {
-        type: "toast",
-        message: "Priority update failed",
-        color: "#ef4444"
-      }
-    });
-
-  } finally {
-
-    setIsSubmitting(false);
-
-  }
-
-};
-
   /* ---------------- MOUSE WHEEL ZOOM ---------------- */
   const onWheel = (e) => {
     e.preventDefault();
     if (e.deltaY < 0) zoomIn();
     else zoomOut();
   };
-const isFinalApproved = loc.status === "FINAL_APPROVED" ;
+const isFinalApproved = isFinalApprovedStatus(loc.status);
   /* ---------------- ROLE RULE ---------------- */
   const isSupervisor = role === "SUPERVISOR";
+  const isDirector = role === "DIRECTOR";
+  const canTakeRoleAction = canRoleTakeSubsiteAction(role, loc.status);
+  const canSubmitToZonal = canRoleSubmitToNextLevel(role, loc.status);
+  const parentSite =
+    loc?.survey_id ? { id: loc.survey_id } : findParentSiteBySubsiteId(state.hierarchySites, loc?.id);
+  const parentSurveyId = parentSite?.id || null;
+  const canSupervisorEditSubsite =
+    isSupervisor && loc.status === "SUBMITTED" && Boolean(parentSurveyId);
 
-const canApprove =
-  ["DIRECTOR", "ZONAL_CHIEF", "GNRB", "ADMIN"].includes(role);
+  const closeWithNotification = (payload = null) => {
+    setIsExiting(true);
+    setTimeout(() => {
+      dispatch({ type: "SET_NOTIFICATION", payload });
+      setIsVisible(false);
+    }, 300);
+  };
+
+  const handleSupervisorSubsiteDecision = async (decision) => {
+    if (!parentSurveyId) {
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message: "Parent station was not found for this location.",
+          color: "#ef4444"
+        }
+      });
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+
+      if (priority !== Number(loc.priority || 2) || remarks !== (loc.remarks || "") || nocFile) {
+        await updateSupervisorSubsite(state.auth.token, parentSurveyId, {
+          subsiteId: loc.id,
+          remarks,
+          priority,
+          nocFile,
+        });
+      }
+
+      await supervisorSubsiteDecision(
+        state.auth.token,
+        parentSurveyId,
+        loc.id,
+        decision,
+        remarks
+      );
+
+      await reloadHierarchySites(dispatch, state.auth.token, state.auth.role);
+      closeWithNotification({
+        type: "toast",
+        message:
+          decision === "APPROVE"
+            ? "Location approved successfully"
+            : "Location rejected successfully",
+        color: decision === "APPROVE" ? "#10b981" : "#ef4444"
+      });
+    } catch (err) {
+      console.error("Supervisor subsite decision failed:", err);
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message: getErrorMessage(err, "Location action failed. Please try again."),
+          color: "#ef4444"
+        }
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSupervisorSubsiteUpdate = async () => {
+    if (!parentSurveyId) {
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message: "Parent station was not found for this location.",
+          color: "#ef4444"
+        }
+      });
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+
+      await updateSupervisorSubsite(state.auth.token, parentSurveyId, {
+        subsiteId: loc.id,
+        remarks,
+        priority,
+        nocFile,
+      });
+
+      await reloadHierarchySites(dispatch, state.auth.token, state.auth.role);
+      closeWithNotification({
+        type: "toast",
+        message: "Location details updated successfully",
+        color: "#10b981"
+      });
+    } catch (err) {
+      console.error("Supervisor subsite update failed:", err);
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message: getErrorMessage(err, "Location update failed. Please try again."),
+          color: "#ef4444"
+        }
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   /* ---------------- ACTION ---------------- */
 const update = async (status) => {
 
   const token = state.auth.token;
-  const role = state.auth.role;
-const decision = status === "approved" ? "APPROVE" : "REJECT";
+  const decision = status === "approved" ? "APPROVE" : "REJECT";
   setIsSubmitting(true);
 
   try {
+    if (isFinalApprovedStatus(loc.status)) {
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message: "This location is already finally approved. No further action allowed.",
+          color: "#f59e0b"
+        }
+      });
+      return;
+    }
+
+    if (!canRoleTakeSubsiteAction(role, loc.status)) {
+      dispatch({
+        type: "SET_NOTIFICATION",
+        payload: {
+          type: "toast",
+          message: "This location is not in actionable status for your role.",
+          color: "#f59e0b"
+        }
+      });
+      return;
+    }
 
     if (role === "DIRECTOR") {
-
       await directorDecision(token, loc.id, decision, remarks);
-
-      if (decision === "APPROVE") {
-        await sendToZonal(token, loc.id);
-      }
-
-    }
-
-    if (role === "ZONAL_CHIEF") {
+    } else if (role === "ZONAL_CHIEF") {
       await zonalDecision(token, loc.id, decision, remarks);
-    }
-
-    if (role === "GNRB") {
+    } else if (role === "GNRB") {
       await gnrbDecision(token, loc.id, decision, remarks);
     }
 
-
-    if (loc.status === "FINAL_APPROVED" || loc.status === "SENT_TO_GNRB") {
-  dispatch({
-    type: "SET_NOTIFICATION",
-    payload: {
+    await reloadHierarchySites(dispatch, state.auth.token, state.auth.role);
+    closeWithNotification({
       type: "toast",
-      message: "This location is already finally approved. No further action allowed.",
-      color: "#f59e0b"
-    }
-  });
-  return;
-}
-    dispatch({ type: "REFETCH_HIERARCHY" });
-
-    handleClose();
+      message:
+        status === "approved"
+          ? "Location approved successfully"
+          : "Location rejected successfully",
+      color: status === "approved" ? "#10b981" : "#ef4444"
+    });
 
   } catch (err) {
 
   console.error("Approval error:", err);
+  const invalidStateMessage =
+    /invalid state/i.test(String(err?.message || "")) &&
+    getInvalidStateMessageForRole(role);
 
   dispatch({
     type: "SET_NOTIFICATION",
     payload: {
       type: "toast",
-      message: "Action failed. Please try again.",
+      message: invalidStateMessage || getErrorMessage(err, "Action failed. Please try again."),
       color: "#ef4444"
     }
   });
@@ -282,25 +385,43 @@ const decision = status === "approved" ? "APPROVE" : "REJECT";
     setIsSubmitting(false);
 
   }
-dispatch({
-  type: "SET_NOTIFICATION",
-  payload: {
-    type: "toast",
-    message:
-      status === "approved"
-        ? "Location approved successfully"
-        : "Location rejected successfully",
-    color: status === "approved" ? "#10b981" : "#ef4444"
+};
+
+const handleDirectorSubmitToZonal = async () => {
+  if (!isDirector || !canSubmitToZonal) return;
+
+  setIsSubmitting(true);
+
+  try {
+    await updateDirectorSubsite(state.auth.token, loc.id, {
+      priority,
+      remarks,
+      nocFile,
+    });
+    await reloadHierarchySites(dispatch, state.auth.token, state.auth.role);
+
+    closeWithNotification({
+      type: "toast",
+      message: "Location submitted to Zonal Chief successfully",
+      color: "#10b981"
+    });
+  } catch (err) {
+    console.error("Send to zonal failed:", err);
+    dispatch({
+      type: "SET_NOTIFICATION",
+      payload: {
+        type: "toast",
+        message: getErrorMessage(err, "Submit to Zonal failed. Please try again."),
+        color: "#ef4444"
+      }
+    });
+  } finally {
+    setIsSubmitting(false);
   }
-});
 };
 
   const handleClose = () => {
-    setIsExiting(true);
-    setTimeout(() => {
-      dispatch({ type: "SET_NOTIFICATION", payload: null });
-      setIsVisible(false);
-    }, 300);
+    closeWithNotification(null);
   };
 
   const formatBool = (v) => (v ? "Yes" : "No");
@@ -323,13 +444,13 @@ dispatch({
       background: "linear-gradient(145deg, #0a1929 0%, #0d2135 100%)",
       borderRadius: 24,
       width: 1000,
+      minWidth: 720,
+      minHeight: 420,
       maxHeight: "90vh",
       display: "flex",
       flexDirection: "column",
       fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
       boxShadow: "0 25px 50px -12px rgba(0, 229, 255, 0.25), 0 0 0 1px rgba(0, 229, 255, 0.1)",
-      transform: isExiting ? "scale(0.95)" : "scale(1)",
-      transition: "transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)",
       position: "relative",
       overflow: "hidden"
     },
@@ -696,7 +817,20 @@ dispatch({
       <style>{scrollbarStyles}</style>
       
       <div style={styles.overlay} onClick={handleClose}>
-        <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <DraggablePanel
+          key={loc.id}
+          title="LOCATION DETAILS"
+          handleColor="#00e5ff"
+          position="absolute"
+          bounds="parent"
+          initialAnchor="center"
+          offsetX={0}
+          offsetY={0}
+          useTransformCenter
+          resizable
+          style={styles.modal}
+          onClick={(e) => e.stopPropagation()}
+        >
           <div style={styles.modalGlow} />
           
           {/* Fixed Header */}
@@ -960,7 +1094,7 @@ dispatch({
 
             {/* Approval Actions */}
 {/* SUPERVISOR PRIORITY UPDATE */}
-{isSupervisor && !isFinalApproved && (
+{false && isSupervisor && !isFinalApproved && (
   <div style={styles.section}>
 
     <div style={styles.sectionTitle}>
@@ -989,8 +1123,267 @@ dispatch({
 
   </div>
 )}
+
+            {false && isSupervisor && !isFinalApproved && (
+              <div style={styles.section}>
+                <div style={styles.sectionTitle}>
+                  <span>S</span>
+                  Supervisor Update
+                  <div style={styles.sectionTitleLine} />
+                </div>
+
+                <div style={{ color: "#80deea", fontSize: 12, marginBottom: 14 }}>
+                  {canSupervisorEditSubsite
+                    ? "Submitted locations can be updated here before station approval."
+                    : "Supervisor editing is available only while the location status is SUBMITTED."}
+                </div>
+
+                <textarea
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  rows={4}
+                  style={styles.textarea}
+                  placeholder="Update remark for this location"
+                  disabled={!canSupervisorEditSubsite || isSubmitting}
+                />
+
+                <select
+                  value={priority}
+                  onChange={(e) => setPriority(Number(e.target.value))}
+                  style={styles.select}
+                  disabled={!canSupervisorEditSubsite || isSubmitting}
+                >
+                  <option value={1}>High Priority (1)</option>
+                  <option value={2}>Medium Priority (2)</option>
+                  <option value={3}>Low Priority (3)</option>
+                </select>
+
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ color: "#80deea", fontSize: 12, marginBottom: 8 }}>
+                    NOC Upload
+                  </div>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => setNocFile(e.target.files?.[0] || null)}
+                    disabled={!canSupervisorEditSubsite || isSubmitting}
+                    style={{ color: "#e0f7fa", fontSize: 12 }}
+                  />
+                  {nocFile && (
+                    <div style={{ color: "#00e5ff", fontSize: 12, marginTop: 8 }}>
+                      Selected file: {nocFile.name}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleSupervisorSubsiteSave}
+                  disabled={!canSupervisorEditSubsite || isSubmitting}
+                  style={{
+                    ...styles.approveBtn,
+                    opacity: !canSupervisorEditSubsite || isSubmitting ? 0.65 : 1,
+                    cursor: !canSupervisorEditSubsite || isSubmitting ? "not-allowed" : "pointer"
+                  }}
+                >
+                  {isSubmitting ? "Saving..." : "Save Subsite Update"}
+                </button>
+              </div>
+            )}
+
+            {isSupervisor && !isFinalApproved && (
+              <div style={styles.section}>
+                <div style={styles.sectionTitle}>
+                  <span>S</span>
+                  Supervisor Review
+                  <div style={styles.sectionTitleLine} />
+                </div>
+
+                <div style={{ color: "#80deea", fontSize: 12, marginBottom: 14 }}>
+                  {canSupervisorEditSubsite
+                    ? "Supervisor can approve or reject this submitted subsite."
+                    : "Supervisor review is available only while the location status is SUBMITTED."}
+                </div>
+
+                <textarea
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  rows={4}
+                  style={styles.textarea}
+                  placeholder="Add supervisor remarks"
+                  disabled={!canSupervisorEditSubsite || isSubmitting}
+                />
+
+                <select
+                  value={priority}
+                  onChange={(e) => setPriority(Number(e.target.value))}
+                  style={styles.select}
+                  disabled={!canSupervisorEditSubsite || isSubmitting}
+                >
+                  <option value={1}>High Priority (1)</option>
+                  <option value={2}>Medium Priority (2)</option>
+                  <option value={3}>Low Priority (3)</option>
+                </select>
+
+                <button
+                  onClick={handleSupervisorSubsiteUpdate}
+                  disabled={!canSupervisorEditSubsite || isSubmitting}
+                  style={{
+                    ...styles.approveBtn,
+                    opacity: !canSupervisorEditSubsite || isSubmitting ? 0.65 : 1,
+                    cursor: !canSupervisorEditSubsite || isSubmitting ? "not-allowed" : "pointer",
+                    marginBottom: 12,
+                  }}
+                >
+                  {isSubmitting ? "Processing..." : "Update Priority / Remarks"}
+                </button>
+
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ color: "#80deea", fontSize: 12, marginBottom: 8 }}>
+                    NOC Upload
+                  </div>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => setNocFile(e.target.files?.[0] || null)}
+                    disabled={!canSupervisorEditSubsite || isSubmitting}
+                    style={{ color: "#e0f7fa", fontSize: 12 }}
+                  />
+                  {nocFile && (
+                    <div style={{ color: "#00e5ff", fontSize: 12, marginTop: 8 }}>
+                      Selected file: {nocFile.name}
+                    </div>
+                  )}
+                </div>
+
+                <div style={styles.buttonGroup}>
+                  <button
+                    onClick={() => handleSupervisorSubsiteDecision("APPROVE")}
+                    disabled={!canSupervisorEditSubsite || isSubmitting}
+                    style={{
+                      ...styles.approveBtn,
+                      opacity: !canSupervisorEditSubsite || isSubmitting ? 0.65 : 1,
+                      cursor: !canSupervisorEditSubsite || isSubmitting ? "not-allowed" : "pointer"
+                    }}
+                  >
+                    {isSubmitting ? "Processing..." : "Approve"}
+                  </button>
+                  <button
+                    onClick={() => handleSupervisorSubsiteDecision("REJECT")}
+                    disabled={!canSupervisorEditSubsite || isSubmitting}
+                    style={{
+                      ...styles.rejectBtn,
+                      opacity: !canSupervisorEditSubsite || isSubmitting ? 0.65 : 1,
+                      cursor: !canSupervisorEditSubsite || isSubmitting ? "not-allowed" : "pointer"
+                    }}
+                  >
+                    {isSubmitting ? "Processing..." : "Reject"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!isSupervisor && !isFinalApproved && (
+              <div style={styles.section}>
+                <div style={styles.sectionTitle}>
+                  <span>R</span>
+                  Role Review
+                  <div style={styles.sectionTitleLine} />
+                </div>
+
+                <div style={{ color: "#80deea", fontSize: 12, marginBottom: 14 }}>
+                  {canTakeRoleAction
+                    ? "You can review and take action on this location."
+                    : canSubmitToZonal
+                    ? "Location is ready to be submitted to next level."
+                    : "Action is not available for this status in your role."}
+                </div>
+
+                <textarea
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  rows={4}
+                  style={styles.textarea}
+                  placeholder="Add your remarks"
+                  disabled={(!canTakeRoleAction && !canSubmitToZonal) || isSubmitting}
+                />
+
+                {isDirector && (
+                  <>
+                    <select
+                      value={priority}
+                      onChange={(e) => setPriority(Number(e.target.value))}
+                      style={styles.select}
+                      disabled={(!canTakeRoleAction && !canSubmitToZonal) || isSubmitting}
+                    >
+                      <option value={1}>High Priority (1)</option>
+                      <option value={2}>Medium Priority (2)</option>
+                      <option value={3}>Low Priority (3)</option>
+                    </select>
+
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ color: "#80deea", fontSize: 12, marginBottom: 8 }}>
+                        NOC Upload
+                      </div>
+                      <input
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png"
+                        onChange={(e) => setNocFile(e.target.files?.[0] || null)}
+                        disabled={(!canTakeRoleAction && !canSubmitToZonal) || isSubmitting}
+                        style={{ color: "#e0f7fa", fontSize: 12 }}
+                      />
+                      {nocFile && (
+                        <div style={{ color: "#00e5ff", fontSize: 12, marginTop: 8 }}>
+                          Selected file: {nocFile.name}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                <div style={styles.buttonGroup}>
+                  <button
+                    onClick={() => update("approved")}
+                    disabled={!canTakeRoleAction || isSubmitting}
+                    style={{
+                      ...styles.approveBtn,
+                      opacity: !canTakeRoleAction || isSubmitting ? 0.65 : 1,
+                      cursor: !canTakeRoleAction || isSubmitting ? "not-allowed" : "pointer"
+                    }}
+                  >
+                    {isSubmitting ? "Processing..." : "Approve"}
+                  </button>
+                  <button
+                    onClick={() => update("rejected")}
+                    disabled={!canTakeRoleAction || isSubmitting}
+                    style={{
+                      ...styles.rejectBtn,
+                      opacity: !canTakeRoleAction || isSubmitting ? 0.65 : 1,
+                      cursor: !canTakeRoleAction || isSubmitting ? "not-allowed" : "pointer"
+                    }}
+                  >
+                    {isSubmitting ? "Processing..." : "Reject"}
+                  </button>
+                </div>
+
+                {isDirector && (
+                  <button
+                    onClick={handleDirectorSubmitToZonal}
+                    disabled={!canSubmitToZonal || isSubmitting}
+                    style={{
+                      ...styles.approveBtn,
+                      background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+                      marginTop: 12,
+                      opacity: !canSubmitToZonal || isSubmitting ? 0.65 : 1,
+                      cursor: !canSubmitToZonal || isSubmitting ? "not-allowed" : "pointer"
+                    }}
+                  >
+                    {isSubmitting ? "Processing..." : "Submit To Zonal Chief"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-        </div>
+        </DraggablePanel>
       </div>
 
       {/* Image Viewer */}
@@ -1172,16 +1565,11 @@ const InfoCard = ({ label, value, badge, priority }) => {
     if (val === 1) return "#ef4444";
     if (val === 2) return "#f59e0b";
     if (val === 3) return "#10b981";
-    if (status === "FINAL_APPROVED") return "#22c55e";
     return "#e0f7fa";
   };
 
   const getStatusColor = (status) => {
-    if (status === "FINAL_APPROVED" || status === "approved") return "#10b981";
-    if (status === "SUPERVISOR_APPROVED") return "#3b82f6";
-    if (status === "rejected") return "#ef4444";
-    if (status === "pending" || status === "SUBMITTED") return "#f59e0b";
-    return "#e0f7fa";
+    return getStatusStyleForRole(status, null).color;
   };
 
   const styles = {

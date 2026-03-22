@@ -32,6 +32,29 @@ hierarchySites: [],
 loadingHierarchy: false,
 };
 
+const normalizeCompareLocation = (raw) => {
+  if (!raw || !raw.id) return null;
+
+  return {
+    id: raw.id,
+    location: raw.location,
+    priority: raw.priority,
+    created_at: raw.created_at,
+    latitude: Number(raw.location_details?.latitude),
+    longitude: Number(raw.location_details?.longitude),
+    state: raw.location_details?.state,
+    district: raw.location_details?.district,
+    city: raw.location_details?.city,
+    address: raw.location_details?.address,
+    monument: raw.monument || {},
+    sky_visibility: raw.sky_visibility || {},
+    power: raw.power || {},
+    connectivity: raw.connectivity || {},
+    photos: raw.photos || {},
+    originalData: raw,
+  };
+};
+
 /* ✅ ALREADY PRESENT */
 export const reducer = (state, action) => {
   switch (action.type) {
@@ -105,40 +128,43 @@ export const reducer = (state, action) => {
       return { ...state, mapTool: action.payload ? "compare" : null, toolPoints: [], distances: [], angles: [] };
 
     case "ADD_COMPARE_LOCATION": {
-  const raw = action.payload;
-  if (!raw || !raw.id) return state;
+      const raw = action.payload;
+      if (!raw || !raw.id) return state;
 
-  if (state.comparedLocations.some(loc => loc.id === raw.id)) {
-    return state;
-  }
+      if (state.comparedLocations.some((loc) => loc.id === raw.id)) {
+        return state;
+      }
 
-  const normalized = {
-    id: raw.id,
-    location: raw.location,
-    priority: raw.priority,
-    created_at: raw.created_at,
+      const normalized = normalizeCompareLocation(raw);
+      if (!normalized) return state;
 
-    latitude: Number(raw.location_details?.latitude),
-    longitude: Number(raw.location_details?.longitude),
-    state: raw.location_details?.state,
-    district: raw.location_details?.district,
-    city: raw.location_details?.city,
-    address: raw.location_details?.address,
+      return {
+        ...state,
+        comparedLocations: [...state.comparedLocations, normalized],
+      };
+    }
 
-    monument: raw.monument || {},
-    sky_visibility: raw.sky_visibility || {},
-    power: raw.power || {},
-    connectivity: raw.connectivity || {},
-    photos: raw.photos || {},
+    case "ADD_COMPARE_LOCATIONS": {
+      const rawItems = Array.isArray(action.payload) ? action.payload : [];
+      if (rawItems.length === 0) {
+        return { ...state, comparedLocations: [] };
+      }
 
-    originalData: raw
-  };
+      const existingIds = new Set();
+      const normalizedItems = [];
 
-  return {
-    ...state,
-    comparedLocations: [...state.comparedLocations, normalized]
-  };
-};
+      rawItems.forEach((item) => {
+        const normalized = normalizeCompareLocation(item);
+        if (!normalized || existingIds.has(normalized.id)) return;
+        existingIds.add(normalized.id);
+        normalizedItems.push(normalized);
+      });
+
+      return {
+        ...state,
+        comparedLocations: normalizedItems,
+      };
+    }
 
     case "REMOVE_COMPARE_LOCATION":
       return { ...state, comparedLocations: state.comparedLocations.filter(loc => loc.id !== action.payload) };

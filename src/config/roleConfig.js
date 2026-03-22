@@ -1,4 +1,9 @@
 export const ROLE_META = {
+  ADMIN: {
+    label: "Admin",
+    color: "#ff6b6b",
+    zones: ["NORTH", "SOUTH", "EAST", "WEST", "CENTRAL"],
+  },
   SURVEYOR: {
     label: "Surveyor",
     color: "#00e676",
@@ -32,24 +37,20 @@ export const ROLES = Object.entries(ROLE_META).map(([key, value]) => ({
   zones: value.zones,
 }));
 
-export const ALL_ZONES = [
-  "NORTH",
-  "SOUTH",
-  "EAST",
-  "WEST",
-  "CENTRAL",
-];
+export const ALL_ZONES = ["NORTH", "SOUTH", "EAST", "WEST", "CENTRAL"];
+
 export const APPROVAL_ROLES = [
   "SUPERVISOR",
   "DIRECTOR",
   "ZONAL_CHIEF",
   "GNRB",
-  "ADMIN"
+  "ADMIN",
 ];
 
 export const NAV_CONFIG = [
-  { id: "map", label: "🗺 Map", roles: "ALL" },
-  { id: "approvals", label: "✅ Approvals", roles: ["SUPERVISOR", "DIRECTOR", "GNRB","ZONAL_CHIEF"] },
-  { id: "users", label: "👥 Users", roles: ["DIRECTOR","SUPERVISOR"] },
-  // { id: "analytics", label: "📊 Analytics", roles: ["DIRECTOR", "GNRB", "ZONAL_CHIEF"] },
+  { id: "map", label: "Map", roles: "ALL" },
+  { id: "approvals", label: "Approvals", roles: ["SUPERVISOR", "DIRECTOR", "GNRB", "ZONAL_CHIEF"] },
+  { id: "users", label: "Users", roles: ["DIRECTOR", "SUPERVISOR"] },
+  { id: "admin", label: "Admin Panel", roles: ["ADMIN"] },
+  // { id: "analytics", label: "Analytics", roles: ["DIRECTOR", "GNRB", "ZONAL_CHIEF"] },
 ];
