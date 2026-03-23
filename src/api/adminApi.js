@@ -24,6 +24,44 @@ const ensureOk = async (res, fallbackMessage) => {
   throw new Error(message);
 };
 
+const tryMutationWithFallbacks = async ({
+  token,
+  endpoints,
+  payload,
+  fallbackMessage,
+  methods = ["POST", "PATCH", "PUT"],
+}) => {
+  const body = JSON.stringify(payload);
+  let lastResponse = null;
+
+  for (const endpoint of endpoints) {
+    for (const method of methods) {
+      const res = await fetch(endpoint, {
+        method,
+        headers: authHeaders(token),
+        body,
+      });
+
+      if (res.ok) {
+        return ensureOk(res, fallbackMessage);
+      }
+
+      if (res.status === 404 || res.status === 405) {
+        lastResponse = res;
+        continue;
+      }
+
+      return ensureOk(res, fallbackMessage);
+    }
+  }
+
+  if (lastResponse) {
+    return ensureOk(lastResponse, fallbackMessage);
+  }
+
+  throw new Error(fallbackMessage);
+};
+
 export const getAdminUsers = async (token) => {
   const res = await fetch(`${BASE_URL}/admin/users/`, {
     headers: authHeaders(token),
@@ -31,30 +69,48 @@ export const getAdminUsers = async (token) => {
   return ensureOk(res, "Failed to fetch admin users");
 };
 
-export const approveAdminUser = async (token, userId) => {
-  const res = await fetch(`${BASE_URL}/admin/user/${userId}/approve/`, {
-    method: "POST",
-    headers: authHeaders(token),
+export const approveAdminUser = async (token, userId, action = "APPROVE") => {
+  const normalizedAction = action === "REJECT" ? "REJECT" : "APPROVE";
+  const fallbackMessage =
+    normalizedAction === "REJECT" ? "Failed to reject user" : "Failed to approve user";
+
+  return tryMutationWithFallbacks({
+    token,
+    endpoints: [
+      `${BASE_URL}/admin/user/${userId}/approve/`,
+      `${BASE_URL}/admin/users/${userId}/approve/`,
+    ],
+    payload: { action: normalizedAction },
+    fallbackMessage,
   });
-  return ensureOk(res, "Failed to approve user");
 };
 
 export const assignDirectorToSurveyor = async (token, userId, directorId) => {
-  const res = await fetch(`${BASE_URL}/admin/user/${userId}/assign-director/`, {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify({ director_id: directorId }),
+  return tryMutationWithFallbacks({
+    token,
+    endpoints: [
+      `${BASE_URL}/admin/user/${userId}/assign-director/`,
+      `${BASE_URL}/admin/users/${userId}/assign-director/`,
+      `${BASE_URL}/admin/user/${userId}/assign_director/`,
+      `${BASE_URL}/admin/users/${userId}/assign_director/`,
+    ],
+    payload: { director_id: directorId },
+    fallbackMessage: "Failed to assign director",
   });
-  return ensureOk(res, "Failed to assign director");
 };
 
 export const changeAdminUserRole = async (token, userId, role) => {
-  const res = await fetch(`${BASE_URL}/admin/user/${userId}/change-role/`, {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify({ role }),
+  return tryMutationWithFallbacks({
+    token,
+    endpoints: [
+      `${BASE_URL}/admin/user/${userId}/change-role/`,
+      `${BASE_URL}/admin/users/${userId}/change-role/`,
+      `${BASE_URL}/admin/user/${userId}/change_role/`,
+      `${BASE_URL}/admin/users/${userId}/change_role/`,
+    ],
+    payload: { role },
+    fallbackMessage: "Failed to change role",
   });
-  return ensureOk(res, "Failed to change role");
 };
 
 export const getAdminSurveys = async (token) => {

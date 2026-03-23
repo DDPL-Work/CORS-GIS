@@ -132,6 +132,24 @@ const visibleLocations = useMemo(() => {
 
       if (!isFinite(lat) || !isFinite(lng)) return;
 
+      const mergedSubsite = {
+        ...sub,
+        site_name: sub.site_name ?? site.site_name ?? site.station_name ?? null,
+        survey_id: sub.survey_id ?? site.id ?? null,
+        surveyor_name:
+          sub.surveyor_name ??
+          site.surveyor_name ??
+          site.surveyor_username ??
+          site.created_by_name ??
+          null,
+        supervisor_name:
+          sub.supervisor_name ??
+          site.supervisor_name ??
+          site.director_name ??
+          null,
+        remarks: sub.remarks ?? sub.remark ?? site.remarks ?? null,
+      };
+
       result.push({
         id: sub.id,
         name: sub.location,
@@ -139,8 +157,17 @@ const visibleLocations = useMemo(() => {
         lng,
         status: sub.status || "SUBMITTED",
         stationName: site.site_name,
+        surveyorName:
+          mergedSubsite.surveyor_name ||
+          site.surveyor_name ||
+          site.surveyor_username ||
+          null,
+        supervisorName:
+          mergedSubsite.supervisor_name ||
+          site.supervisor_name ||
+          null,
         type: "location",
-        originalData: sub
+        originalData: mergedSubsite
       });
 
     });

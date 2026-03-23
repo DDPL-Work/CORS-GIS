@@ -13,6 +13,40 @@ import { getStatusStyleForRole, normalizeWorkflowStatus } from "../utils/workflo
 
 const ROLE_OPTIONS = ["SURVEYOR", "SUPERVISOR", "DIRECTOR", "ZONAL_CHIEF", "GNRB", "ADMIN"];
 
+const pickCollection = (payload, keys = []) => {
+  if (Array.isArray(payload)) return payload;
+  for (const key of keys) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  if (Array.isArray(payload?.results)) return payload.results;
+  return [];
+};
+
+const normalizeAdminUser = (item) => {
+  const isApproved =
+    typeof item?.is_approved === "boolean"
+      ? item.is_approved
+      : typeof item?.approved === "boolean"
+      ? item.approved
+      : Boolean(item?.approved);
+
+  return { ...item, is_approved: isApproved };
+};
+
+const normalizeAdminSurvey = (item) => ({
+  ...item,
+  state: item?.state_name || item?.state,
+  district: item?.district_name || item?.district,
+  subdistrict: item?.subdistrict_name || item?.subdistrict,
+  station: item?.station_name || item?.station,
+  surveyor_name:
+    item?.surveyor_name ||
+    item?.created_by_name ||
+    item?.assigned_to_name ||
+    item?.username ||
+    "-",
+});
+
 const AdminPanelPage = () => {
   const { state, dispatch } = useApp();
   const token = state.auth.token;
@@ -52,11 +86,7 @@ const AdminPanelPage = () => {
     setLoading((prev) => ({ ...prev, users: true }));
     try {
       const data = await getAdminUsers(token);
-      const rows = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.results)
-        ? data.results
-        : [];
+      const rows = pickCollection(data, ["users", "data"]).map(normalizeAdminUser);
       setUsers(rows);
       setRoleDraftByUser(
         rows.reduce((acc, item) => {
@@ -77,13 +107,7 @@ const AdminPanelPage = () => {
     setLoading((prev) => ({ ...prev, surveys: true }));
     try {
       const data = await getAdminSurveys(token);
-      setSurveys(
-        Array.isArray(data)
-          ? data
-          : Array.isArray(data?.results)
-          ? data.results
-          : []
-      );
+      setSurveys(pickCollection(data, ["surveys", "sites", "data"]).map(normalizeAdminSurvey));
     } catch (err) {
       console.error("Admin surveys fetch failed:", err);
       notify(err.message || "Failed to load surveys", "#ef4444");
@@ -100,20 +124,8 @@ const AdminPanelPage = () => {
         getAdminDistricts(token),
         getAdminStations(token),
       ]);
-      setDistricts(
-        Array.isArray(districtsResult)
-          ? districtsResult
-          : Array.isArray(districtsResult?.results)
-          ? districtsResult.results
-          : []
-      );
-      setStations(
-        Array.isArray(stationsResult)
-          ? stationsResult
-          : Array.isArray(stationsResult?.results)
-          ? stationsResult.results
-          : []
-      );
+      setDistricts(pickCollection(districtsResult, ["districts", "data"]));
+      setStations(pickCollection(stationsResult, ["stations", "data"]));
     } catch (err) {
       console.error("Admin master data fetch failed:", err);
       notify(err.message || "Failed to load master data", "#ef4444");
@@ -156,15 +168,22 @@ const AdminPanelPage = () => {
     );
   }, [surveys, surveySearch]);
 
-  const handleApprove = async (userId) => {
+  const handleUserApprovalAction = async (userId, action) => {
+    const normalizedAction = action === "REJECT" ? "REJECT" : "APPROVE";
     markBusy(userId, true);
     try {
-      await approveAdminUser(token, userId);
-      notify("User approved successfully");
+      await approveAdminUser(token, userId, normalizedAction);
+      notify(
+        normalizedAction === "REJECT" ? "User rejected successfully" : "User approved successfully",
+        normalizedAction === "REJECT" ? "#f59e0b" : "#10b981"
+      );
       await loadUsers();
     } catch (err) {
       console.error("Admin approve failed:", err);
-      notify(err.message || "User approval failed", "#ef4444");
+      notify(
+        err.message || (normalizedAction === "REJECT" ? "User rejection failed" : "User approval failed"),
+        "#ef4444"
+      );
     } finally {
       markBusy(userId, false);
     }
@@ -308,13 +327,22 @@ const AdminPanelPage = () => {
                       <td style={styles.cell}>
                         <div style={styles.actionGroup}>
                           {!item.is_approved && (
-                            <button
-                              onClick={() => handleApprove(item.id)}
-                              disabled={isBusy}
-                              style={styles.actionBtn("#10b981")}
-                            >
-                              Approve
-                            </button>
+                            <>
+                              <button
+                                onClick={() => handleUserApprovalAction(item.id, "APPROVE")}
+                                disabled={isBusy}
+                                style={styles.actionBtn("#10b981")}
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => handleUserApprovalAction(item.id, "REJECT")}
+                                disabled={isBusy}
+                                style={styles.actionBtn("#ef4444")}
+                              >
+                                Reject
+                              </button>
+                            </>
                           )}
                           <button
                             onClick={() => handleRoleChange(item.id)}

@@ -58,10 +58,29 @@ const normalizeLocation = (loc) => {
     state: data.location_details?.state ?? loc.state ?? null,
 
     /* BASIC */
-    site_name: data.site_name ?? loc.site_name ?? null,
+    site_name:
+      data.site_name ??
+      data.station_name ??
+      data.stationName ??
+      loc.site_name ??
+      loc.stationName ??
+      null,
     survey_id: data.survey_id ?? loc.survey_id ?? null,
-    surveyor_name: data.surveyor_name ?? null,
-    supervisor_name: data.supervisor_name ?? null,
+    surveyor_name:
+      data.surveyor_name ??
+      data.surveyor ??
+      data.surveyor_username ??
+      data.created_by_name ??
+      loc.surveyor_name ??
+      loc.surveyorName ??
+      null,
+    supervisor_name:
+      data.supervisor_name ??
+      data.supervisor ??
+      data.supervisor_username ??
+      loc.supervisor_name ??
+      loc.supervisorName ??
+      null,
     contact_details: data.contact_details ?? null,
     rinex_file: data.rinex_file ?? null,
     status: data.status ?? loc.status ?? null,
@@ -98,7 +117,7 @@ const normalizeLocation = (loc) => {
     photo_captured: data.photo_details?.captured_at ?? null,
 
     created_at: data.created_at ?? loc.created_at ?? null,
-    remarks: data.remarks ?? loc.remarks ?? null
+    remarks: data.remarks ?? data.remark ?? loc.remarks ?? null
   };
 };
 const LocationComparisonPanel = () => {
@@ -216,7 +235,28 @@ const LocationComparisonPanel = () => {
   };
 const syncComparedSelections = (hierarchySites) => {
   const refreshedSelections = (state.comparedLocations || [])
-    .map((location) => findSubsiteById(hierarchySites, location.id))
+    .map((location) => {
+      const parentSite = findParentSiteBySubsiteId(hierarchySites, location.id);
+      const subsite = findSubsiteById(hierarchySites, location.id);
+      if (!subsite) return null;
+
+      return {
+        ...subsite,
+        site_name: subsite.site_name ?? parentSite?.site_name ?? null,
+        survey_id: subsite.survey_id ?? parentSite?.id ?? null,
+        surveyor_name:
+          subsite.surveyor_name ??
+          parentSite?.surveyor_name ??
+          parentSite?.surveyor_username ??
+          null,
+        supervisor_name:
+          subsite.supervisor_name ??
+          parentSite?.supervisor_name ??
+          parentSite?.director_name ??
+          null,
+        remarks: subsite.remarks ?? subsite.remark ?? parentSite?.remarks ?? null,
+      };
+    })
     .filter(Boolean);
 
   dispatch({

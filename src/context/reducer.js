@@ -38,6 +38,10 @@ const normalizeCompareLocation = (raw) => {
   return {
     id: raw.id,
     location: raw.location,
+    site_name: raw.site_name ?? raw.station_name ?? null,
+    surveyor_name: raw.surveyor_name ?? raw.surveyor_username ?? null,
+    supervisor_name: raw.supervisor_name ?? null,
+    remarks: raw.remarks ?? raw.remark ?? null,
     priority: raw.priority,
     created_at: raw.created_at,
     latitude: Number(raw.location_details?.latitude),
